@@ -75,19 +75,25 @@ app.get('/', (req, res) => {
     let res = await fetch(url);
     let data = await res.json();
 
-    let ruta = data.routes[0].geometry;
+  let ruta = data.routes[0].geometry;
 
-    rutaLayer = L.geoJSON(ruta).addTo(map);
+rutaLayer = L.geoJSON(ruta).addTo(map);
+map.fitBounds(rutaLayer.getBounds());
 
-    map.fitBounds(rutaLayer.getBounds());
-  }
-</script>
+let coords = ruta.coordinates;
+let paso = Math.max(1, Math.floor(coords.length / 5));
 
-</body>
-</html>
+for (let i = 0; i < coords.length; i += paso) {
+  let lon = coords[i][0];
+  let lat = coords[i][1];
+
+  let marker = L.marker([lat, lon]).addTo(map);
+
+  let temp = Math.floor(Math.random() * 15) + 10;
+  let lluvia = Math.random() > 0.5 ? "Sí" : "No";
+
+  marker.bindPopup(`
+    🌡️ Temp: ${temp}°C <br>
+    🌧️ Lluvia: ${lluvia}
   `);
-});
-
-app.listen(PORT, () => {
-  console.log("Servidor funcionando");
-});
+}
