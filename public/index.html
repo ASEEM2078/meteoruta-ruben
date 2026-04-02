@@ -52,6 +52,14 @@
       background: #1d4ed8;
     }
 
+    .btn-secondary {
+      background: #0f766e;
+    }
+
+    .btn-secondary:hover {
+      background: #115e59;
+    }
+
     #map {
       flex: 1;
       height: calc(100vh - 92px);
@@ -100,6 +108,23 @@
       margin-bottom: 4px;
     }
 
+    .radar-controls {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .radar-controls button {
+      flex: 1;
+      margin-top: 0;
+    }
+
+    .muted {
+      color: #6b7280;
+      font-size: 12px;
+      margin-top: 6px;
+    }
+
     @media (max-width: 900px) {
       .layout { flex-direction: column; }
       .sidebar { width: 100%; min-width: 100%; }
@@ -135,6 +160,16 @@
       </div>
 
       <button onclick="calcularRuta()">Calcular ruta</button>
+
+      <div class="panel">
+        <h3>Radar de lluvia</h3>
+        <button class="btn-secondary" onclick="toggleRadar()">Activar / desactivar radar</button>
+        <div class="radar-controls">
+          <button onclick="cargarRadar()">Actualizar radar</button>
+          <button onclick="ajustarOpacidadRadar()">Cambiar opacidad</button>
+        </div>
+        <div id="radarEstado" class="muted">Radar no cargado todavía.</div>
+      </div>
 
       <div class="panel">
         <h3>Resumen</h3>
@@ -177,6 +212,10 @@
     let markersLayer = L.layerGroup().addTo(map);
     let tOrigen = null;
     let tDestino = null;
+
+    let radarLayer = null;
+    let radarVisible = true;
+    let radarOpacity = 0.45;
 
     function ponerHoraSalidaPorDefecto() {
       const input = document.getElementById('horaSalida');
@@ -331,6 +370,72 @@
       `).join('');
     }
 
+    async function cargarRadar() {
+      try {
+        document.getElementById('radarEstado').textContent = 'Cargando radar...';
+
+        const res = await fetch('https://api.rainviewer.com/public/weather-maps.json');
+        const data = await res.json();
+
+        const host = data.host || 'https://tilecache.rainviewer.com';
+        const frames = data?.radar?.past || [];
+
+        if (!frames.length) {
+          document.getElementById('radarEstado').textContent = 'No hay frames de radar disponibles.';
+          return;
+        }
+
+        const ultimoFrame = frames[frames.length - 1];
+        const tileUrl = host + ultimoFrame.path + '/256/{z}/{x}/{y}/2/1_1.png';
+
+        if (radarLayer) {
+          map.removeLayer(radarLayer);
+        }
+
+        radarLayer = L.tileLayer(tileUrl, {
+          tileSize: 256,
+          opacity: radarOpacity,
+          zIndex: 500
+        });
+
+        if (radarVisible) {
+          radarLayer.addTo(map);
+        }
+
+        const fechaFrame = new Date((ultimoFrame.time || 0) * 1000);
+        document.getElementById('radarEstado').textContent =
+          'Radar cargado. Último frame: ' + fechaFrame.toLocaleString('es-ES');
+      } catch (e) {
+        console.error(e);
+        document.getElementById('radarEstado').textContent = 'No se pudo cargar el radar.';
+      }
+    }
+
+    function toggleRadar() {
+      radarVisible = !radarVisible;
+
+      if (!radarLayer) return;
+
+      if (radarVisible) {
+        radarLayer.addTo(map);
+        document.getElementById('radarEstado').textContent += ' | Radar visible';
+      } else {
+        map.removeLayer(radarLayer);
+        document.getElementById('radarEstado').textContent += ' | Radar oculto';
+      }
+    }
+
+    function ajustarOpacidadRadar() {
+      if (!radarLayer) return;
+
+      if (radarOpacity === 0.45) radarOpacity = 0.65;
+      else if (radarOpacity === 0.65) radarOpacity = 0.30;
+      else radarOpacity = 0.45;
+
+      radarLayer.setOpacity(radarOpacity);
+      document.getElementById('radarEstado').textContent += ' | Opacidad: ' + radarOpacity;
+    }
+
     async function calcularRuta() {
       try {
         const origenTxt = document.getElementById("origen").value.trim();
@@ -450,6 +555,7 @@
     }
 
     setTimeout(() => map.invalidateSize(), 300);
+    cargarRadar();
   </script>
 </body>
 </html>
