@@ -78,6 +78,15 @@
       background: #991b1b;
     }
 
+    .btn-link {
+      display: block;
+      text-decoration: none;
+    }
+
+    .btn-link button {
+      margin-top: 0;
+    }
+
     #map {
       flex: 1;
       height: calc(100vh - 92px);
@@ -154,7 +163,7 @@
 <body>
   <div class="topbar">
     <h1>MeteoRuta AEMET</h1>
-    <p>Creado por Rubén</p>
+    <p>Creado por Rubén López de Quero</p>
   </div>
 
   <div class="layout">
@@ -198,6 +207,13 @@
           <button class="btn-danger" onclick="limpiarAnalisisLluvia()">Limpiar análisis</button>
         </div>
         <div id="lluviaRutaEstado" class="muted">Todavía no analizada.</div>
+      </div>
+
+      <div class="panel">
+        <h3>Tráfico en tiempo real</h3>
+        <a class="btn-link" href="https://etraffic.dgt.es/etrafficWEB/" target="_blank" rel="noopener noreferrer">
+          <button class="btn-secondary" type="button">Ver estado del tráfico (DGT)</button>
+        </a>
       </div>
 
       <div class="panel">
@@ -310,7 +326,7 @@
       if (nivel === 'rojo') return '#dc2626';
       if (nivel === 'naranja') return '#f97316';
       if (nivel === 'amarillo') return '#eab308';
-      return '#64748b';
+      return '#16a34a';
     }
 
     async function sugerir(inputId, listId) {
@@ -501,7 +517,7 @@
         if (tramoCoords.length >= 2) {
           L.polyline(tramoCoords, {
             color: colorTramoAviso(nivel),
-            weight: 7,
+            weight: 8,
             opacity: 0.95
           }).addTo(avisoTramosLayer);
         }
@@ -866,9 +882,9 @@
 
         rutaLayer = L.geoJSON(ruta, {
           style: {
-            color: '#94a3b8',
+            color: '#16a34a',
             weight: 5,
-            opacity: 0.7
+            opacity: 0.75
           }
         }).addTo(map);
 
