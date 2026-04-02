@@ -132,6 +132,11 @@
       </div>
 
       <div class="panel">
+        <h3>Provincias detectadas en la ruta</h3>
+        <div id="provinciasRuta" class="small">Sin calcular.</div>
+      </div>
+
+      <div class="panel">
         <h3>Avisos oficiales AEMET</h3>
         <div id="avisosOficiales" class="small">Todavía no consultados.</div>
       </div>
@@ -179,6 +184,8 @@
         .toLowerCase()
         .normalize('NFD')
         .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^\w\s-]/g, ' ')
+        .replace(/\s+/g, ' ')
         .trim();
     }
 
@@ -259,20 +266,44 @@
       return 'verde';
     }
 
-    function avisosRelacionadosConRuta(avisos, origenTxt, destinoTxt, puntos) {
-      const referencias = [
-        origenTxt,
-        destinoTxt,
-        ...puntos.map(p => p.nombre || '')
-      ].map(normalizarTexto);
+    function extraerProvinciaDesdeTexto(nombre) {
+      const t = normalizarTexto(nombre);
 
+      const provincias = [
+        'alicante', 'castellon', 'valencia', 'murcia', 'albacete',
+        'cuenca', 'madrid', 'toledo', 'almeria', 'granada',
+        'barcelona', 'tarragona', 'lleida', 'girona', 'zaragoza',
+        'teruel', 'huesca', 'sevilla', 'cordoba', 'jaen',
+        'malaga', 'cadiz', 'huelva', 'badajoz', 'caceres'
+      ];
+
+      for (const p of provincias) {
+        if (t.includes(p)) return p;
+      }
+
+      return null;
+    }
+
+    function extraerProvinciasRuta(origenTxt, destinoTxt, puntos) {
+      const conjunto = new Set();
+
+      const todos = [origenTxt, destinoTxt, ...puntos.map(p => p.nombre || '')];
+      for (const item of todos) {
+        const provincia = extraerProvinciaDesdeTexto(item);
+        if (provincia) conjunto.add(provincia);
+      }
+
+      return Array.from(conjunto);
+    }
+
+    function avisosRelacionadosConProvincias(avisos, provinciasRuta) {
       const relacionados = [];
 
       for (const aviso of avisos) {
         const bruto = typeof aviso === 'string' ? aviso : JSON.stringify(aviso);
         const texto = normalizarTexto(bruto);
 
-        const coincide = referencias.some(ref => ref && texto.includes(ref.split(',')[0]));
+        const coincide = provinciasRuta.some(prov => texto.includes(prov));
         if (coincide) {
           relacionados.push(bruto);
         }
@@ -295,6 +326,7 @@
         document.getElementById("meteoRuta").textContent = "Consultando AEMET...";
         document.getElementById("nivelAviso").innerHTML = '<span class="badge verde">Calculando</span>';
         document.getElementById("avisosOficiales").textContent = "Consultando avisos oficiales...";
+        document.getElementById("provinciasRuta").textContent = "Calculando provincias...";
 
         const origen = await geocode(origenTxt);
         const destino = await geocode(destinoTxt);
@@ -327,6 +359,10 @@
           puntos.push({ lat, lon, nombre });
         }
 
+        const provinciasRuta = extraerProvinciasRuta(origenTxt, destinoTxt, puntos);
+        document.getElementById("provinciasRuta").innerText =
+          provinciasRuta.length ? provinciasRuta.join(', ') : 'No detectadas';
+
         const q = encodeURIComponent(JSON.stringify(puntos));
         const meteoRes = await fetch('/api/ruta-meteo?puntos=' + q);
         const meteoData = await meteoRes.json();
@@ -339,7 +375,7 @@
         const avisosData = await avisosRes.json();
 
         const listaAvisosBruta = extraerTextoAvisos(avisosData.datos);
-        const avisosRuta = avisosRelacionadosConRuta(listaAvisosBruta, origenTxt, destinoTxt, puntos);
+        const avisosRuta = avisosRelacionadosConProvincias(listaAvisosBruta, provinciasRuta);
 
         const coloresPrediccion = meteoData.puntos.map(p => p.avisoColor || 'verde');
         const coloresAvisos = avisosRuta.map(a => detectarNivelDesdeTexto(a));
@@ -378,7 +414,8 @@
         if (avisosRuta.length > 0) {
           document.getElementById("avisosOficiales").innerText = avisosRuta.slice(0, 5).join('\n\n');
         } else {
-          document.getElementById("avisosOficiales").innerText = "No se han encontrado avisos oficiales claramente relacionados con esta ruta.";
+          document.getElementById("avisosOficiales").innerText =
+            "No se han encontrado avisos oficiales relacionados con las provincias detectadas en esta ruta.";
         }
 
       } catch (e) {
@@ -387,6 +424,7 @@
         document.getElementById("resumen").textContent = "No se pudo calcular.";
         document.getElementById("meteoRuta").textContent = "No se pudo consultar AEMET.";
         document.getElementById("avisosOficiales").textContent = "No se pudieron consultar los avisos oficiales.";
+        document.getElementById("provinciasRuta").textContent = "No se pudieron detectar provincias.";
       }
     }
 
