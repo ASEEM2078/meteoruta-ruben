@@ -1155,7 +1155,9 @@
         const coords = ruta.coordinates;
         currentRouteCoords = coords;
 
-        const paso = Math.max(1, Math.floor(coords.length / 8));
+        // LIMITAR PETICIONES A AEMET: máximo 5 puntos intermedios + último si no coincide
+        const maxPuntosMeteo = 5;
+        const paso = Math.max(1, Math.floor(coords.length / maxPuntosMeteo));
 
         const puntos = [];
         for (let i = 0; i < coords.length; i += paso) {
@@ -1163,6 +1165,10 @@
           const lat = coords[i][1];
           const nombre = await reverseName(lat, lon);
           puntos.push({ lat, lon, nombre, routeIndex: i });
+
+          if (puntos.length >= maxPuntosMeteo) {
+            break;
+          }
         }
 
         const ultimoIndex = coords.length - 1;
