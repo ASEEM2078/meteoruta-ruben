@@ -245,9 +245,9 @@
 
       if (datos.datos && Array.isArray(datos.datos)) return datos.datos;
 
-      if (datos.avisos && Array.isArray(datos.avisos)) return datos.avisos;
+      if (typeof datos === 'string') return [datos];
 
-      return [datos];
+      return [JSON.stringify(datos)];
     }
 
     function detectarNivelDesdeTexto(texto) {
