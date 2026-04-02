@@ -1,265 +1,215 @@
 const express = require('express');
+const path = require('path');
+
 const app = express();
 const PORT = process.env.PORT || 3000;
+const AEMET_API_KEY = process.env.AEMET_API_KEY || '';
 
-app.get('/', (req, res) => {
-  res.send(`<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>MeteoRuta - Creado por Rubén</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
-  <style>
-    * { box-sizing: border-box; }
-    body { margin: 0; font-family: Arial, sans-serif; background: #f5f7fb; }
-    .topbar {
-      background: #0f172a;
-      color: white;
-      text-align: center;
-      padding: 16px;
+app.use(express.static(path.join(__dirname, 'public')));
+
+let municipiosCache = null;
+let municipiosCacheTime = 0;
+
+function normalizeText(text) {
+  return (text || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\w\s-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+async function aemetStep(url) {
+  const res = await fetch(url, {
+    headers: {
+      accept: 'application/json',
+      api_key: AEMET_API_KEY
     }
-    .topbar h1 { margin: 0; }
-    .topbar p { margin: 6px 0 0; }
+  });
 
-    .layout {
-      display: flex;
-      min-height: calc(100vh - 92px);
-    }
+  if (!res.ok) {
+    throw new Error('Error AEMET paso 1: ' + res.status);
+  }
 
-    .sidebar {
-      width: 320px;
-      min-width: 320px;
-      background: white;
-      padding: 16px;
-      border-right: 1px solid #ddd;
-    }
+  const meta = await res.json();
 
-    .sidebar h3 { margin-top: 0; }
+  if (!meta.datos) {
+    throw new Error('AEMET no devolvió URL de datos');
+  }
 
-    .field { margin-bottom: 12px; }
+  const dataRes = await fetch(meta.datos);
+  if (!dataRes.ok) {
+    throw new Error('Error AEMET paso 2: ' + dataRes.status);
+  }
 
-    input, button {
-      width: 100%;
-      padding: 10px;
-      margin-top: 6px;
-      font-size: 14px;
-    }
+  return await dataRes.json();
+}
 
-    button {
-      background: #2563eb;
-      color: white;
-      border: none;
-      cursor: pointer;
-      border-radius: 6px;
-    }
+async function getMunicipios() {
+  const now = Date.now();
 
-    button:hover {
-      background: #1d4ed8;
-    }
+  if (municipiosCache && now - municipiosCacheTime < 12 * 60 * 60 * 1000) {
+    return municipiosCache;
+  }
 
-    #map {
-      flex: 1;
-      height: calc(100vh - 92px);
-      min-height: 500px;
-    }
+  const url = 'https://opendata.aemet.es/opendata/api/maestro/municipios';
+  const data = await aemetStep(url);
 
-    #info {
-      margin-top: 16px;
-      white-space: pre-line;
-      font-size: 14px;
-      line-height: 1.5;
-    }
+  municipiosCache = data.map(item => ({
+    id: String(item.id || '').replace(/^id/, ''),
+    nombre: item.nombre || '',
+    nombreNorm: normalizeText(item.nombre || ''),
+    provincia: item.provincia || ''
+  }));
 
-    @media (max-width: 900px) {
-      .layout {
-        flex-direction: column;
-      }
-      .sidebar {
-        width: 100%;
-        min-width: 100%;
-      }
-      #map {
-        width: 100%;
-        height: 65vh;
-      }
-    }
-  </style>
-</head>
-<body>
-  <div class="topbar">
-    <h1>MeteoRuta AEMET</h1>
-    <p>Creado por Rubén</p>
-  </div>
+  municipiosCacheTime = now;
+  return municipiosCache;
+}
 
-  <div class="layout">
-    <div class="sidebar">
-      <h3>Buscar ruta</h3>
+function escogerMunicipio(texto, municipios) {
+  const raw = (texto || '').split(',')[0].trim();
+  const norm = normalizeText(raw);
 
-      <div class="field">
-        <label>Origen</label>
-        <input id="origen" list="listaOrigen" placeholder="Escribe ciudad o pueblo">
-        <datalist id="listaOrigen"></datalist>
-      </div>
+  let exact = municipios.find(m => m.nombreNorm === norm);
+  if (exact) return exact;
 
-      <div class="field">
-        <label>Destino</label>
-        <input id="destino" list="listaDestino" placeholder="Escribe ciudad o pueblo">
-        <datalist id="listaDestino"></datalist>
-      </div>
+  let contains = municipios.find(m => m.nombreNorm.includes(norm) || norm.includes(m.nombreNorm));
+  if (contains) return contains;
 
-      <button onclick="calcularRuta()">Calcular ruta</button>
+  return null;
+}
 
-      <h3 style="margin-top:20px;">Resumen</h3>
-      <div id="info">Calcula una ruta...</div>
-    </div>
+function extraerResumenPrediccion(pred) {
+  const hoy = pred?.prediccion?.dia?.[0];
 
-    <div id="map"></div>
-  </div>
+  if (!hoy) {
+    return {
+      texto: 'Sin predicción disponible',
+      avisoColor: 'verde'
+    };
+  }
 
-  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-  <script>
-    const map = L.map('map').setView([40.4168, -3.7038], 6);
+  const estado = hoy.estadoCielo?.find(Boolean)?.descripcion || 'Sin dato';
+  const tempMax = hoy.temperatura?.maxima ?? '—';
+  const tempMin = hoy.temperatura?.minima ?? '—';
+  const viento = hoy.viento?.find(Boolean)?.velocidad ?? '—';
+  const probLluvia = hoy.probPrecipitacion?.find(Boolean)?.value ?? '—';
 
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '© OpenStreetMap'
-    }).addTo(map);
+  let avisoColor = 'verde';
+  const lluviaNum = Number(probLluvia);
 
-    let rutaLayer = null;
-    let markersLayer = L.layerGroup().addTo(map);
-    let tOrigen = null;
-    let tDestino = null;
+  if (!Number.isNaN(lluviaNum) && lluviaNum >= 70) avisoColor = 'naranja';
+  else if (!Number.isNaN(lluviaNum) && lluviaNum >= 40) avisoColor = 'amarillo';
 
-    async function sugerir(inputId, listId) {
-      const texto = document.getElementById(inputId).value.trim();
-      if (texto.length < 2) return;
+  const texto =
+    'Estado del cielo: ' + estado + '\n' +
+    'Temperatura mínima: ' + tempMin + '°C\n' +
+    'Temperatura máxima: ' + tempMax + '°C\n' +
+    'Probabilidad de precipitación: ' + probLluvia + '%\n' +
+    'Viento: ' + viento + ' km/h';
 
-      const url = "https://nominatim.openstreetmap.org/search?format=json&limit=5&countrycodes=es&q=" + encodeURIComponent(texto);
-      const res = await fetch(url, {
-        headers: { "Accept-Language": "es" }
-      });
-      const data = await res.json();
+  return { texto, avisoColor, tempMin, tempMax, probLluvia, estado };
+}
 
-      const list = document.getElementById(listId);
-      list.innerHTML = "";
-
-      data.forEach(item => {
-        const option = document.createElement("option");
-        option.value = item.display_name;
-        list.appendChild(option);
-      });
+app.get('/api/municipio-prediccion', async (req, res) => {
+  try {
+    if (!AEMET_API_KEY) {
+      return res.status(500).json({ error: 'Falta AEMET_API_KEY en Render' });
     }
 
-    document.getElementById("origen").addEventListener("input", function () {
-      clearTimeout(tOrigen);
-      tOrigen = setTimeout(function () {
-        sugerir("origen", "listaOrigen");
-      }, 300);
+    const lugar = req.query.lugar;
+    if (!lugar) {
+      return res.status(400).json({ error: 'Falta parámetro lugar' });
+    }
+
+    const municipios = await getMunicipios();
+    const municipio = escogerMunicipio(lugar, municipios);
+
+    if (!municipio) {
+      return res.status(404).json({ error: 'No se encontró municipio AEMET para ' + lugar });
+    }
+
+    const data = await aemetStep(
+      'https://opendata.aemet.es/opendata/api/prediccion/especifica/municipio/diaria/' + municipio.id
+    );
+
+    const pred = Array.isArray(data) ? data[0] : data;
+    const resumen = extraerResumenPrediccion(pred);
+
+    res.json({
+      municipio: municipio.nombre,
+      provincia: municipio.provincia,
+      resumen
     });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
-    document.getElementById("destino").addEventListener("input", function () {
-      clearTimeout(tDestino);
-      tDestino = setTimeout(function () {
-        sugerir("destino", "listaDestino");
-      }, 300);
-    });
-
-    async function geocode(lugar) {
-      const res = await fetch(
-        "https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=es&q=" + encodeURIComponent(lugar),
-        { headers: { "Accept-Language": "es" } }
-      );
-
-      const data = await res.json();
-
-      if (!data || data.length === 0) {
-        throw new Error("No se encontró: " + lugar);
-      }
-
-      return {
-        lat: parseFloat(data[0].lat),
-        lon: parseFloat(data[0].lon),
-        nombre: data[0].display_name
-      };
+app.get('/api/ruta-meteo', async (req, res) => {
+  try {
+    if (!AEMET_API_KEY) {
+      return res.status(500).json({ error: 'Falta AEMET_API_KEY en Render' });
     }
 
-    async function calcularRuta() {
+    const puntos = JSON.parse(req.query.puntos || '[]');
+
+    if (!Array.isArray(puntos) || puntos.length === 0) {
+      return res.status(400).json({ error: 'Faltan puntos de ruta' });
+    }
+
+    const municipios = await getMunicipios();
+    const resultados = [];
+
+    for (const p of puntos) {
+      const nombreBase = (p.nombre || '').split(',')[0];
+      const municipio = escogerMunicipio(nombreBase, municipios);
+
+      if (!municipio) {
+        resultados.push({
+          nombre: p.nombre || 'Punto',
+          error: 'Sin municipio AEMET asociado',
+          avisoColor: 'verde',
+          lat: p.lat,
+          lon: p.lon
+        });
+        continue;
+      }
+
       try {
-        const origenTxt = document.getElementById("origen").value.trim();
-        const destinoTxt = document.getElementById("destino").value.trim();
+        const data = await aemetStep(
+          'https://opendata.aemet.es/opendata/api/prediccion/especifica/municipio/diaria/' + municipio.id
+        );
 
-        if (!origenTxt || !destinoTxt) {
-          alert("Introduce origen y destino");
-          return;
-        }
+        const pred = Array.isArray(data) ? data[0] : data;
+        const resumen = extraerResumenPrediccion(pred);
 
-        const origen = await geocode(origenTxt);
-        const destino = await geocode(destinoTxt);
-
-        if (rutaLayer) {
-          map.removeLayer(rutaLayer);
-        }
-        markersLayer.clearLayers();
-
-        const url = "https://router.project-osrm.org/route/v1/driving/" +
-          origen.lon + "," + origen.lat + ";" +
-          destino.lon + "," + destino.lat +
-          "?overview=full&geometries=geojson";
-
-        const res = await fetch(url);
-        const data = await res.json();
-
-        if (!data.routes || data.routes.length === 0) {
-          throw new Error("No se pudo calcular la ruta");
-        }
-
-        const route = data.routes[0];
-        const ruta = route.geometry;
-
-        rutaLayer = L.geoJSON(ruta, {
-          style: {
-            color: "#2563eb",
-            weight: 5
-          }
-        }).addTo(map);
-
-        map.fitBounds(rutaLayer.getBounds());
-
-        const coords = ruta.coordinates;
-        const paso = Math.max(1, Math.floor(coords.length / 5));
-
-        for (let i = 0; i < coords.length; i += paso) {
-          const lon = coords[i][0];
-          const lat = coords[i][1];
-
-          const temp = Math.floor(Math.random() * 15) + 10;
-          const lluvia = Math.random() > 0.5 ? "Sí" : "No";
-
-          L.marker([lat, lon]).addTo(markersLayer).bindPopup(
-            "🌡️ " + temp + "°C<br>🌧️ " + lluvia
-          );
-        }
-
-        const distancia = (route.distance / 1000).toFixed(1);
-        const tiempo = Math.round(route.duration / 60);
-
-        document.getElementById("info").innerText =
-          "Distancia: " + distancia + " km\\n" +
-          "Duración: " + tiempo + " min";
+        resultados.push({
+          nombre: municipio.nombre,
+          provincia: municipio.provincia,
+          lat: p.lat,
+          lon: p.lon,
+          ...resumen
+        });
       } catch (e) {
-        console.error(e);
-        alert(e.message);
+        resultados.push({
+          nombre: municipio.nombre,
+          provincia: municipio.provincia,
+          lat: p.lat,
+          lon: p.lon,
+          error: e.message,
+          avisoColor: 'verde'
+        });
       }
     }
 
-    setTimeout(function () {
-      map.invalidateSize();
-    }, 300);
-  </script>
-</body>
-</html>`);
+    res.json({ puntos: resultados });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
 
 app.listen(PORT, () => {
-  console.log("Servidor funcionando");
+  console.log('Servidor funcionando en puerto ' + PORT);
 });
