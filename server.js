@@ -43,7 +43,13 @@ async function aemetStep(url) {
     throw new Error('Error AEMET paso 2: ' + dataRes.status);
   }
 
-  return await dataRes.json();
+  const contentType = dataRes.headers.get('content-type') || '';
+
+  if (contentType.includes('application/json')) {
+    return await dataRes.json();
+  }
+
+  return await dataRes.text();
 }
 
 async function getMunicipios() {
@@ -99,8 +105,11 @@ function extraerResumenPrediccion(pred) {
   let avisoColor = 'verde';
   const lluviaNum = Number(probLluvia);
 
-  if (!Number.isNaN(lluviaNum) && lluviaNum >= 70) avisoColor = 'naranja';
-  else if (!Number.isNaN(lluviaNum) && lluviaNum >= 40) avisoColor = 'amarillo';
+  if (!Number.isNaN(lluviaNum) && lluviaNum >= 70) {
+    avisoColor = 'naranja';
+  } else if (!Number.isNaN(lluviaNum) && lluviaNum >= 40) {
+    avisoColor = 'amarillo';
+  }
 
   const texto =
     'Estado del cielo: ' + estado + '\n' +
@@ -109,7 +118,14 @@ function extraerResumenPrediccion(pred) {
     'Probabilidad de precipitación: ' + probLluvia + '%\n' +
     'Viento: ' + viento + ' km/h';
 
-  return { texto, avisoColor, tempMin, tempMax, probLluvia, estado };
+  return {
+    texto,
+    avisoColor,
+    tempMin,
+    tempMax,
+    probLluvia,
+    estado
+  };
 }
 
 app.get('/api/municipio-prediccion', async (req, res) => {
@@ -205,6 +221,30 @@ app.get('/api/ruta-meteo', async (req, res) => {
     }
 
     res.json({ puntos: resultados });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// NUEVO: avisos oficiales AEMET
+app.get('/api/avisos-oficiales', async (req, res) => {
+  try {
+    if (!AEMET_API_KEY) {
+      return res.status(500).json({ error: 'Falta AEMET_API_KEY en Render' });
+    }
+
+    const area = req.query.area || 'esp';
+
+    const url =
+      'https://opendata.aemet.es/opendata/api/avisos_cap/ultimoelaborado/area/' + area;
+
+    const data = await aemetStep(url);
+
+    res.json({
+      ok: true,
+      area,
+      datos: data
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
