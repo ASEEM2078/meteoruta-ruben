@@ -20,6 +20,27 @@ function normalizeText(text) {
     .trim();
 }
 
+function tryParseJSON(value) {
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return value;
+  }
+}
+
+function ensureArray(value) {
+  const parsed = tryParseJSON(value);
+
+  if (Array.isArray(parsed)) return parsed;
+  if (parsed && Array.isArray(parsed.datos)) return parsed.datos;
+  if (parsed && Array.isArray(parsed.data)) return parsed.data;
+  if (parsed && Array.isArray(parsed.municipios)) return parsed.municipios;
+  if (parsed && Array.isArray(parsed.items)) return parsed.items;
+
+  return null;
+}
+
 async function aemetStep(url) {
   const res = await fetch(url, {
     headers: {
@@ -39,17 +60,13 @@ async function aemetStep(url) {
   }
 
   const dataRes = await fetch(meta.datos);
+
   if (!dataRes.ok) {
     throw new Error('Error AEMET paso 2: ' + dataRes.status);
   }
 
-  const contentType = dataRes.headers.get('content-type') || '';
-
-  if (contentType.includes('application/json')) {
-    return await dataRes.json();
-  }
-
-  return await dataRes.text();
+  const text = await dataRes.text();
+  return tryParseJSON(text);
 }
 
 async function getMunicipios() {
@@ -60,14 +77,19 @@ async function getMunicipios() {
   }
 
   const url = 'https://opendata.aemet.es/opendata/api/maestro/municipios';
-  const data = await aemetStep(url);
+  const raw = await aemetStep(url);
+  const arr = ensureArray(raw);
 
-  municipiosCache = data.map(item => ({
-    id: String(item.id || '').replace(/^id/, ''),
-    nombre: item.nombre || '',
-    nombreNorm: normalizeText(item.nombre || ''),
+  if (!arr) {
+    throw new Error('No se pudo interpretar la lista de municipios de AEMET');
+  }
+
+  municipiosCache = arr.map(item => ({
+    id: String(item.id || item.idema || '').replace(/^id/i, ''),
+    nombre: item.nombre || item.nombreMunicipio || '',
+    nombreNorm: normalizeText(item.nombre || item.nombreMunicipio || ''),
     provincia: item.provincia || ''
-  }));
+  })).filter(m => m.id && m.nombre);
 
   municipiosCacheTime = now;
   return municipiosCache;
@@ -79,6 +101,9 @@ function escogerMunicipio(texto, municipios) {
 
   let exact = municipios.find(m => m.nombreNorm === norm);
   if (exact) return exact;
+
+  let starts = municipios.find(m => m.nombreNorm.startsWith(norm));
+  if (starts) return starts;
 
   let contains = municipios.find(m => m.nombreNorm.includes(norm) || norm.includes(m.nombreNorm));
   if (contains) return contains;
@@ -226,7 +251,6 @@ app.get('/api/ruta-meteo', async (req, res) => {
   }
 });
 
-// NUEVO: avisos oficiales AEMET
 app.get('/api/avisos-oficiales', async (req, res) => {
   try {
     if (!AEMET_API_KEY) {
@@ -234,9 +258,7 @@ app.get('/api/avisos-oficiales', async (req, res) => {
     }
 
     const area = req.query.area || 'esp';
-
-    const url =
-      'https://opendata.aemet.es/opendata/api/avisos_cap/ultimoelaborado/area/' + area;
+    const url = 'https://opendata.aemet.es/opendata/api/avisos_cap/ultimoelaborado/area/' + area;
 
     const data = await aemetStep(url);
 
