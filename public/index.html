@@ -23,8 +23,8 @@
     }
 
     .sidebar {
-      width: 330px;
-      min-width: 330px;
+      width: 360px;
+      min-width: 360px;
       background: white;
       padding: 16px;
       border-right: 1px solid #ddd;
@@ -80,6 +80,11 @@
     .naranja { background: #fed7aa; color: #9a3412; }
     .rojo { background: #fecaca; color: #991b1b; }
 
+    .small {
+      font-size: 13px;
+      color: #374151;
+    }
+
     @media (max-width: 900px) {
       .layout { flex-direction: column; }
       .sidebar { width: 100%; min-width: 100%; }
@@ -125,6 +130,11 @@
         <h3>Nivel estimado en la ruta</h3>
         <div id="nivelAviso"><span class="badge verde">Sin calcular</span></div>
       </div>
+
+      <div class="panel">
+        <h3>Avisos oficiales AEMET</h3>
+        <div id="avisosOficiales" class="small">Todavía no consultados.</div>
+      </div>
     </div>
 
     <div id="map"></div>
@@ -162,6 +172,14 @@
       if (lista.includes('naranja')) return 'naranja';
       if (lista.includes('amarillo')) return 'amarillo';
       return 'verde';
+    }
+
+    function normalizarTexto(txt) {
+      return (txt || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .trim();
     }
 
     async function sugerir(inputId, listId) {
@@ -220,6 +238,49 @@
       return data.display_name || (lat + "," + lon);
     }
 
+    function extraerTextoAvisos(datos) {
+      if (!datos) return [];
+
+      if (Array.isArray(datos)) return datos;
+
+      if (datos.datos && Array.isArray(datos.datos)) return datos.datos;
+
+      if (datos.avisos && Array.isArray(datos.avisos)) return datos.avisos;
+
+      return [datos];
+    }
+
+    function detectarNivelDesdeTexto(texto) {
+      const t = normalizarTexto(texto);
+
+      if (t.includes('rojo')) return 'rojo';
+      if (t.includes('naranja')) return 'naranja';
+      if (t.includes('amarillo')) return 'amarillo';
+      return 'verde';
+    }
+
+    function avisosRelacionadosConRuta(avisos, origenTxt, destinoTxt, puntos) {
+      const referencias = [
+        origenTxt,
+        destinoTxt,
+        ...puntos.map(p => p.nombre || '')
+      ].map(normalizarTexto);
+
+      const relacionados = [];
+
+      for (const aviso of avisos) {
+        const bruto = typeof aviso === 'string' ? aviso : JSON.stringify(aviso);
+        const texto = normalizarTexto(bruto);
+
+        const coincide = referencias.some(ref => ref && texto.includes(ref.split(',')[0]));
+        if (coincide) {
+          relacionados.push(bruto);
+        }
+      }
+
+      return relacionados;
+    }
+
     async function calcularRuta() {
       try {
         const origenTxt = document.getElementById("origen").value.trim();
@@ -233,6 +294,7 @@
         document.getElementById("resumen").textContent = "Calculando...";
         document.getElementById("meteoRuta").textContent = "Consultando AEMET...";
         document.getElementById("nivelAviso").innerHTML = '<span class="badge verde">Calculando</span>';
+        document.getElementById("avisosOficiales").textContent = "Consultando avisos oficiales...";
 
         const origen = await geocode(origenTxt);
         const destino = await geocode(destinoTxt);
@@ -273,8 +335,15 @@
           throw new Error(meteoData.error);
         }
 
-        const colores = meteoData.puntos.map(p => p.avisoColor || 'verde');
-        const avisoGlobal = peorAviso(colores);
+        const avisosRes = await fetch('/api/avisos-oficiales?area=esp');
+        const avisosData = await avisosRes.json();
+
+        const listaAvisosBruta = extraerTextoAvisos(avisosData.datos);
+        const avisosRuta = avisosRelacionadosConRuta(listaAvisosBruta, origenTxt, destinoTxt, puntos);
+
+        const coloresPrediccion = meteoData.puntos.map(p => p.avisoColor || 'verde');
+        const coloresAvisos = avisosRuta.map(a => detectarNivelDesdeTexto(a));
+        const avisoGlobal = peorAviso([...coloresPrediccion, ...coloresAvisos]);
 
         rutaLayer = L.geoJSON(ruta, {
           style: {
@@ -306,11 +375,18 @@
         document.getElementById("meteoRuta").innerText = textoMeteo || 'Sin datos meteorológicos.';
         document.getElementById("nivelAviso").innerHTML = badgeAviso(avisoGlobal);
 
+        if (avisosRuta.length > 0) {
+          document.getElementById("avisosOficiales").innerText = avisosRuta.slice(0, 5).join('\n\n');
+        } else {
+          document.getElementById("avisosOficiales").innerText = "No se han encontrado avisos oficiales claramente relacionados con esta ruta.";
+        }
+
       } catch (e) {
         console.error(e);
         alert(e.message);
         document.getElementById("resumen").textContent = "No se pudo calcular.";
         document.getElementById("meteoRuta").textContent = "No se pudo consultar AEMET.";
+        document.getElementById("avisosOficiales").textContent = "No se pudieron consultar los avisos oficiales.";
       }
     }
 
