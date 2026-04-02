@@ -100,11 +100,6 @@
       margin-bottom: 4px;
     }
 
-    .muted {
-      color: #6b7280;
-      font-size: 12px;
-    }
-
     @media (max-width: 900px) {
       .layout { flex-direction: column; }
       .sidebar { width: 100%; min-width: 100%; }
@@ -152,18 +147,13 @@
       </div>
 
       <div class="panel">
-        <h3>Nivel estimado en la ruta</h3>
+        <h3>Nivel oficial en la ruta</h3>
         <div id="nivelAviso"><span class="badge verde">Sin calcular</span></div>
       </div>
 
       <div class="panel">
         <h3>Provincias detectadas en la ruta</h3>
         <div id="provinciasRuta" class="small">Sin calcular.</div>
-      </div>
-
-      <div class="panel">
-        <h3>Comunidad detectada</h3>
-        <div id="comunidadRuta" class="small">Sin calcular.</div>
       </div>
 
       <div class="panel">
@@ -200,6 +190,16 @@
 
     ponerHoraSalidaPorDefecto();
 
+    function normalizeText(text) {
+      return (text || '')
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^\w\s-]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+    }
+
     function colorAviso(nivel) {
       if (nivel === 'rojo') return '#dc2626';
       if (nivel === 'naranja') return '#f97316';
@@ -219,16 +219,6 @@
       if (lista.includes('naranja')) return 'naranja';
       if (lista.includes('amarillo')) return 'amarillo';
       return 'verde';
-    }
-
-    function normalizarTexto(txt) {
-      return (txt || '')
-        .toLowerCase()
-        .normalize('NFD')
-        .replace(/[\u0300-\u036f]/g, '')
-        .replace(/[^\w\s-]/g, ' ')
-        .replace(/\s+/g, ' ')
-        .trim();
     }
 
     async function sugerir(inputId, listId) {
@@ -288,7 +278,7 @@
     }
 
     function extraerProvinciaDesdeTexto(nombre) {
-      const t = normalizarTexto(nombre);
+      const t = normalizeText(nombre);
 
       const provincias = [
         'alicante', 'castellon', 'valencia', 'murcia', 'albacete',
@@ -317,137 +307,28 @@
       return Array.from(conjunto);
     }
 
-    function detectarComunidad(provincias) {
-      const set = new Set(provincias);
-
-      if (set.has('alicante') || set.has('castellon') || set.has('valencia')) {
-        return 'comunitat valenciana';
-      }
-      if (set.has('murcia')) return 'region de murcia';
-      if (set.has('albacete') || set.has('cuenca')) return 'castilla la mancha';
-      if (set.has('barcelona') || set.has('tarragona') || set.has('lleida') || set.has('girona')) {
-        return 'cataluna';
-      }
-      if (set.has('zaragoza') || set.has('teruel') || set.has('huesca')) {
-        return 'aragon';
-      }
-      if (set.has('madrid')) return 'comunidad de madrid';
-
-      return '';
-    }
-
-    function parsearAvisosXML(xmlText) {
-      if (!xmlText || typeof xmlText !== 'string') return [];
-      if (!xmlText.trim().startsWith('<')) return [];
-
-      const parser = new DOMParser();
-      const xml = parser.parseFromString(xmlText, 'text/xml');
-      const infos = Array.from(xml.getElementsByTagName('info'));
-
-      return infos.map(info => {
-        const areaDesc = info.getElementsByTagName('areaDesc')[0]?.textContent?.trim() || '';
-        const event = info.getElementsByTagName('event')[0]?.textContent?.trim() || '';
-        const headline = info.getElementsByTagName('headline')[0]?.textContent?.trim() || '';
-        const description = info.getElementsByTagName('description')[0]?.textContent?.trim() || '';
-        const severity = info.getElementsByTagName('severity')[0]?.textContent?.trim() || '';
-        const onset = info.getElementsByTagName('onset')[0]?.textContent?.trim() || '';
-        const expires = info.getElementsByTagName('expires')[0]?.textContent?.trim() || '';
-
-        return {
-          areaDesc,
-          event,
-          headline,
-          description,
-          severity,
-          onset,
-          expires
-        };
-      });
-    }
-
-    function detectarNivelAvisoObj(aviso) {
-      const t = normalizarTexto(
-        [aviso.severity, aviso.headline, aviso.description, aviso.event].join(' ')
-      );
-
-      if (t.includes('extreme') || t.includes('rojo')) return 'rojo';
-      if (t.includes('severe') || t.includes('naranja')) return 'naranja';
-      if (t.includes('moderate') || t.includes('amarillo')) return 'amarillo';
-      return 'verde';
-    }
-
-    function parseFechaAemet(valor) {
-      if (!valor) return null;
-      const d = new Date(valor);
-      if (isNaN(d.getTime())) return null;
-      return d;
-    }
-
-    function avisoActivoEnHora(aviso, fechaSalida) {
-      const inicio = parseFechaAemet(aviso.onset);
-      const fin = parseFechaAemet(aviso.expires);
-
-      if (!fechaSalida) return true;
-      if (!inicio && !fin) return true;
-      if (inicio && fechaSalida < inicio) return false;
-      if (fin && fechaSalida > fin) return false;
-
-      return true;
-    }
-
-    function avisosRelacionadosConRuta(avisos, provinciasRuta, comunidadRuta, fechaSalida) {
-      return avisos.filter(aviso => {
-        const texto = normalizarTexto(
-          [aviso.areaDesc, aviso.headline, aviso.description, aviso.event].join(' ')
-        );
-
-        const coincideProvincia = provinciasRuta.some(prov => texto.includes(prov));
-        const coincideComunidad = comunidadRuta && texto.includes(comunidadRuta);
-        const coincideHora = avisoActivoEnHora(aviso, fechaSalida);
-
-        return coincideHora && (coincideProvincia || coincideComunidad);
-      });
-    }
-
-    function formatearFechaAviso(valor) {
-      const d = parseFechaAemet(valor);
-      if (!d) return 'No indicada';
-
-      return d.toLocaleString('es-ES', {
-        day: '2-digit',
-        month: '2-digit',
-        year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit'
-      });
-    }
-
-    function pintarAvisosOficiales(avisos, comunidadRuta, fechaSalida, totalActivos) {
+    function pintarAvisosOficiales(avisos, infoMeta) {
       const cont = document.getElementById('avisosOficiales');
 
       if (!avisos.length) {
-        cont.innerHTML =
-          'No se han encontrado avisos oficiales activos para la hora de salida en las provincias o comunidad detectadas de esta ruta.' +
-          '\n\n' +
-          'Comunidad detectada: ' + (comunidadRuta || 'No detectada') +
-          '\n' +
-          'Avisos activos totales en España a esa hora: ' + totalActivos;
+        cont.innerText =
+          'No se han encontrado avisos oficiales activos para la hora de salida en las provincias detectadas.\n\n' +
+          'Avisos totales leídos: ' + infoMeta.totalAvisos + '\n' +
+          'Avisos activos a esa hora: ' + infoMeta.activos + '\n' +
+          'Avisos relacionados con la ruta: ' + infoMeta.relacionados;
         return;
       }
 
-      cont.innerHTML = avisos.slice(0, 6).map(aviso => {
-        const nivel = detectarNivelAvisoObj(aviso);
-        return `
-          <div class="alertaBox">
-            <div class="alertaTitulo">${aviso.areaDesc || 'Zona no indicada'}</div>
-            <div><strong>Fenómeno:</strong> ${aviso.event || 'Aviso meteorológico'}</div>
-            <div>${badgeAviso(nivel)}</div>
-            <div><strong>Desde:</strong> ${formatearFechaAviso(aviso.onset)}</div>
-            <div><strong>Hasta:</strong> ${formatearFechaAviso(aviso.expires)}</div>
-            <div style="margin-top:6px;">${aviso.description || aviso.headline || ''}</div>
-          </div>
-        `;
-      }).join('');
+      cont.innerHTML = avisos.slice(0, 8).map(aviso => `
+        <div class="alertaBox">
+          <div class="alertaTitulo">${aviso.areaDesc || 'Zona no indicada'}</div>
+          <div><strong>Fenómeno:</strong> ${aviso.event || 'Aviso meteorológico'}</div>
+          <div>${badgeAviso(aviso.nivel)}</div>
+          <div><strong>Desde:</strong> ${aviso.onset ? new Date(aviso.onset).toLocaleString('es-ES') : 'No indicada'}</div>
+          <div><strong>Hasta:</strong> ${aviso.expires ? new Date(aviso.expires).toLocaleString('es-ES') : 'No indicada'}</div>
+          <div style="margin-top:6px;">${aviso.description || aviso.headline || ''}</div>
+        </div>
+      `).join('');
     }
 
     async function calcularRuta() {
@@ -467,7 +348,6 @@
         document.getElementById("nivelAviso").innerHTML = '<span class="badge verde">Calculando</span>';
         document.getElementById("avisosOficiales").textContent = "Consultando avisos oficiales...";
         document.getElementById("provinciasRuta").textContent = "Calculando provincias...";
-        document.getElementById("comunidadRuta").textContent = "Calculando comunidad...";
 
         const origen = await geocode(origenTxt);
         const destino = await geocode(destinoTxt);
@@ -501,12 +381,8 @@
         }
 
         const provinciasRuta = extraerProvinciasRuta(origenTxt, destinoTxt, puntos);
-        const comunidadRuta = detectarComunidad(provinciasRuta);
-
         document.getElementById("provinciasRuta").innerText =
           provinciasRuta.length ? provinciasRuta.join(', ') : 'No detectadas';
-        document.getElementById("comunidadRuta").innerText =
-          comunidadRuta || 'No detectada';
 
         const q = encodeURIComponent(JSON.stringify(puntos));
         const meteoRes = await fetch('/api/ruta-meteo?puntos=' + q);
@@ -516,26 +392,18 @@
           throw new Error(meteoData.error);
         }
 
-        const avisosRes = await fetch('/api/avisos-oficiales?area=esp');
+        const provParam = encodeURIComponent(provinciasRuta.join(','));
+        const fechaParam = encodeURIComponent(fechaSalida ? fechaSalida.toISOString() : '');
+        const avisosRes = await fetch('/api/avisos-oficiales?area=esp&provincias=' + provParam + '&fecha=' + fechaParam);
         const avisosData = await avisosRes.json();
 
-        const xmlAvisos = typeof avisosData.datos === 'string' ? avisosData.datos : '';
-        const avisosParseados = parsearAvisosXML(xmlAvisos);
+        if (avisosData.error) {
+          throw new Error(avisosData.error);
+        }
 
-        const avisosActivos = avisosParseados.filter(a => avisoActivoEnHora(a, fechaSalida));
-        const avisosRuta = avisosRelacionadosConRuta(
-          avisosActivos,
-          provinciasRuta,
-          comunidadRuta,
-          fechaSalida
-        );
-
-        const coloresPrediccion = meteoData.puntos.map(p => p.avisoColor || 'verde');
-        const coloresAvisos = avisosRuta.map(a => detectarNivelAvisoObj(a));
-
-        const avisoGlobal = avisosRuta.length
-          ? peorAviso(coloresAvisos)
-          : peorAviso(coloresPrediccion);
+        const avisosRuta = Array.isArray(avisosData.avisos) ? avisosData.avisos : [];
+        const coloresAvisos = avisosRuta.map(a => a.nivel || 'verde');
+        const avisoGlobal = avisosRuta.length ? peorAviso(coloresAvisos) : 'verde';
 
         rutaLayer = L.geoJSON(ruta, {
           style: {
@@ -569,13 +437,7 @@
 
         document.getElementById("meteoRuta").innerText = textoMeteo || 'Sin datos meteorológicos.';
         document.getElementById("nivelAviso").innerHTML = badgeAviso(avisoGlobal);
-
-        pintarAvisosOficiales(
-          avisosRuta,
-          comunidadRuta,
-          fechaSalida,
-          avisosActivos.length
-        );
+        pintarAvisosOficiales(avisosRuta, avisosData);
 
       } catch (e) {
         console.error(e);
@@ -584,7 +446,6 @@
         document.getElementById("meteoRuta").textContent = "No se pudo consultar AEMET.";
         document.getElementById("avisosOficiales").textContent = "No se pudieron consultar los avisos oficiales.";
         document.getElementById("provinciasRuta").textContent = "No se pudieron detectar provincias.";
-        document.getElementById("comunidadRuta").textContent = "No se pudo detectar la comunidad.";
       }
     }
 
