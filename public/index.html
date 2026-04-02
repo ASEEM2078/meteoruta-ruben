@@ -3,10 +3,318 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>MeteoRuta AEMET</title>
+  <title>MeteoRuta AEMET - Creado por Rubén</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: Arial, sans-serif; background: #f5f7fb; }
+    .topbar {
+      background: #0f172a;
+      color: white;
+      text-align: center;
+      padding: 16px;
+    }
+    .topbar h1 { margin: 0; }
+    .topbar p { margin: 6px 0 0; }
+
+    .layout {
+      display: flex;
+      min-height: calc(100vh - 92px);
+    }
+
+    .sidebar {
+      width: 330px;
+      min-width: 330px;
+      background: white;
+      padding: 16px;
+      border-right: 1px solid #ddd;
+      overflow-y: auto;
+    }
+
+    .field { margin-bottom: 12px; }
+
+    input, button {
+      width: 100%;
+      padding: 10px;
+      margin-top: 6px;
+      font-size: 14px;
+    }
+
+    button {
+      background: #2563eb;
+      color: white;
+      border: none;
+      cursor: pointer;
+      border-radius: 6px;
+    }
+
+    button:hover {
+      background: #1d4ed8;
+    }
+
+    #map {
+      flex: 1;
+      height: calc(100vh - 92px);
+      min-height: 500px;
+    }
+
+    .panel {
+      margin-top: 18px;
+      padding-top: 12px;
+      border-top: 1px solid #ddd;
+      white-space: pre-line;
+      line-height: 1.5;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 12px;
+      font-weight: bold;
+      margin-top: 8px;
+    }
+
+    .verde { background: #dcfce7; color: #166534; }
+    .amarillo { background: #fef08a; color: #854d0e; }
+    .naranja { background: #fed7aa; color: #9a3412; }
+    .rojo { background: #fecaca; color: #991b1b; }
+
+    @media (max-width: 900px) {
+      .layout { flex-direction: column; }
+      .sidebar { width: 100%; min-width: 100%; }
+      #map { width: 100%; height: 65vh; }
+    }
+  </style>
 </head>
 <body>
-  <h1>MeteoRuta AEMET</h1>
-  <p>Creado por Rubén</p>
+  <div class="topbar">
+    <h1>MeteoRuta AEMET</h1>
+    <p>Creado por Rubén</p>
+  </div>
+
+  <div class="layout">
+    <div class="sidebar">
+      <h3>Buscar ruta</h3>
+
+      <div class="field">
+        <label>Origen</label>
+        <input id="origen" list="listaOrigen" placeholder="Escribe ciudad o pueblo">
+        <datalist id="listaOrigen"></datalist>
+      </div>
+
+      <div class="field">
+        <label>Destino</label>
+        <input id="destino" list="listaDestino" placeholder="Escribe ciudad o pueblo">
+        <datalist id="listaDestino"></datalist>
+      </div>
+
+      <button onclick="calcularRuta()">Calcular ruta</button>
+
+      <div class="panel">
+        <h3>Resumen</h3>
+        <div id="resumen">Calcula una ruta...</div>
+      </div>
+
+      <div class="panel">
+        <h3>Previsión meteorológica de la ruta</h3>
+        <div id="meteoRuta">Todavía no calculada.</div>
+      </div>
+
+      <div class="panel">
+        <h3>Nivel estimado en la ruta</h3>
+        <div id="nivelAviso"><span class="badge verde">Sin calcular</span></div>
+      </div>
+    </div>
+
+    <div id="map"></div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script>
+    const map = L.map('map').setView([40.4168, -3.7038], 6);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '© OpenStreetMap'
+    }).addTo(map);
+
+    let rutaLayer = null;
+    let markersLayer = L.layerGroup().addTo(map);
+    let tOrigen = null;
+    let tDestino = null;
+
+    function colorAviso(nivel) {
+      if (nivel === 'rojo') return '#dc2626';
+      if (nivel === 'naranja') return '#f97316';
+      if (nivel === 'amarillo') return '#eab308';
+      return '#2563eb';
+    }
+
+    function badgeAviso(nivel) {
+      if (nivel === 'rojo') return '<span class="badge rojo">Aviso rojo</span>';
+      if (nivel === 'naranja') return '<span class="badge naranja">Aviso naranja</span>';
+      if (nivel === 'amarillo') return '<span class="badge amarillo">Aviso amarillo</span>';
+      return '<span class="badge verde">Sin avisos relevantes</span>';
+    }
+
+    function peorAviso(lista) {
+      if (lista.includes('rojo')) return 'rojo';
+      if (lista.includes('naranja')) return 'naranja';
+      if (lista.includes('amarillo')) return 'amarillo';
+      return 'verde';
+    }
+
+    async function sugerir(inputId, listId) {
+      const texto = document.getElementById(inputId).value.trim();
+      if (texto.length < 2) return;
+
+      const url = "https://nominatim.openstreetmap.org/search?format=json&limit=5&countrycodes=es&q=" + encodeURIComponent(texto);
+      const res = await fetch(url, { headers: { "Accept-Language": "es" } });
+      const data = await res.json();
+
+      const list = document.getElementById(listId);
+      list.innerHTML = "";
+
+      data.forEach(item => {
+        const option = document.createElement("option");
+        option.value = item.display_name;
+        list.appendChild(option);
+      });
+    }
+
+    document.getElementById("origen").addEventListener("input", function () {
+      clearTimeout(tOrigen);
+      tOrigen = setTimeout(() => sugerir("origen", "listaOrigen"), 300);
+    });
+
+    document.getElementById("destino").addEventListener("input", function () {
+      clearTimeout(tDestino);
+      tDestino = setTimeout(() => sugerir("destino", "listaDestino"), 300);
+    });
+
+    async function geocode(lugar) {
+      const res = await fetch(
+        "https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=es&q=" + encodeURIComponent(lugar),
+        { headers: { "Accept-Language": "es" } }
+      );
+
+      const data = await res.json();
+
+      if (!data || data.length === 0) {
+        throw new Error("No se encontró: " + lugar);
+      }
+
+      return {
+        lat: parseFloat(data[0].lat),
+        lon: parseFloat(data[0].lon),
+        nombre: data[0].display_name
+      };
+    }
+
+    async function reverseName(lat, lon) {
+      const res = await fetch(
+        "https://nominatim.openstreetmap.org/reverse?format=json&lat=" + lat + "&lon=" + lon,
+        { headers: { "Accept-Language": "es" } }
+      );
+      const data = await res.json();
+      return data.display_name || (lat + "," + lon);
+    }
+
+    async function calcularRuta() {
+      try {
+        const origenTxt = document.getElementById("origen").value.trim();
+        const destinoTxt = document.getElementById("destino").value.trim();
+
+        if (!origenTxt || !destinoTxt) {
+          alert("Introduce origen y destino");
+          return;
+        }
+
+        document.getElementById("resumen").textContent = "Calculando...";
+        document.getElementById("meteoRuta").textContent = "Consultando AEMET...";
+        document.getElementById("nivelAviso").innerHTML = '<span class="badge verde">Calculando</span>';
+
+        const origen = await geocode(origenTxt);
+        const destino = await geocode(destinoTxt);
+
+        if (rutaLayer) map.removeLayer(rutaLayer);
+        markersLayer.clearLayers();
+
+        const url = "https://router.project-osrm.org/route/v1/driving/" +
+          origen.lon + "," + origen.lat + ";" +
+          destino.lon + "," + destino.lat +
+          "?overview=full&geometries=geojson";
+
+        const res = await fetch(url);
+        const data = await res.json();
+
+        if (!data.routes || data.routes.length === 0) {
+          throw new Error("No se pudo calcular la ruta");
+        }
+
+        const route = data.routes[0];
+        const ruta = route.geometry;
+        const coords = ruta.coordinates;
+        const paso = Math.max(1, Math.floor(coords.length / 4));
+
+        const puntos = [];
+        for (let i = 0; i < coords.length; i += paso) {
+          const lon = coords[i][0];
+          const lat = coords[i][1];
+          const nombre = await reverseName(lat, lon);
+          puntos.push({ lat, lon, nombre });
+        }
+
+        const q = encodeURIComponent(JSON.stringify(puntos));
+        const meteoRes = await fetch('/api/ruta-meteo?puntos=' + q);
+        const meteoData = await meteoRes.json();
+
+        if (meteoData.error) {
+          throw new Error(meteoData.error);
+        }
+
+        const colores = meteoData.puntos.map(p => p.avisoColor || 'verde');
+        const avisoGlobal = peorAviso(colores);
+
+        rutaLayer = L.geoJSON(ruta, {
+          style: {
+            color: colorAviso(avisoGlobal),
+            weight: 6,
+            opacity: 0.9
+          }
+        }).addTo(map);
+
+        map.fitBounds(rutaLayer.getBounds());
+
+        let textoMeteo = '';
+
+        meteoData.puntos.forEach((p, idx) => {
+          const popup = p.error
+            ? '<strong>Punto ' + (idx + 1) + '</strong><br>' + p.nombre + '<br>' + p.error
+            : '<strong>' + p.nombre + '</strong><br>' + p.texto.replace(/\n/g, '<br>');
+
+          L.marker([p.lat, p.lon]).addTo(markersLayer).bindPopup(popup);
+
+          textoMeteo += (idx + 1) + '. ' + p.nombre + '\n';
+          textoMeteo += p.error ? (p.error + '\n\n') : (p.texto + '\n\n');
+        });
+
+        document.getElementById("resumen").innerText =
+          "Distancia: " + (route.distance / 1000).toFixed(1) + " km\n" +
+          "Duración estimada: " + Math.round(route.duration / 60) + " min";
+
+        document.getElementById("meteoRuta").innerText = textoMeteo || 'Sin datos meteorológicos.';
+        document.getElementById("nivelAviso").innerHTML = badgeAviso(avisoGlobal);
+
+      } catch (e) {
+        console.error(e);
+        alert(e.message);
+        document.getElementById("resumen").textContent = "No se pudo calcular.";
+        document.getElementById("meteoRuta").textContent = "No se pudo consultar AEMET.";
+      }
+    }
+
+    setTimeout(() => map.invalidateSize(), 300);
+  </script>
 </body>
 </html>
