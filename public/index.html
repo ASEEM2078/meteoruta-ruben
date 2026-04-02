@@ -8,12 +8,14 @@
   <style>
     * { box-sizing: border-box; }
     body { margin: 0; font-family: Arial, sans-serif; background: #f5f7fb; }
+
     .topbar {
       background: #0f172a;
       color: white;
       text-align: center;
       padding: 16px;
     }
+
     .topbar h1 { margin: 0; }
     .topbar p { margin: 6px 0 0; }
 
@@ -251,6 +253,9 @@
     let currentRouteCoords = [];
     let rainPointsLayer = null;
 
+    let avisoTramosLayer = null;
+    let avisoPinsLayer = null;
+
     function ponerHoraSalidaPorDefecto() {
       const input = document.getElementById('horaSalida');
       const ahora = new Date();
@@ -292,6 +297,20 @@
       if (lista.includes('naranja')) return 'naranja';
       if (lista.includes('amarillo')) return 'amarillo';
       return 'verde';
+    }
+
+    function pesoNivel(nivel) {
+      if (nivel === 'rojo') return 3;
+      if (nivel === 'naranja') return 2;
+      if (nivel === 'amarillo') return 1;
+      return 0;
+    }
+
+    function colorTramoAviso(nivel) {
+      if (nivel === 'rojo') return '#dc2626';
+      if (nivel === 'naranja') return '#f97316';
+      if (nivel === 'amarillo') return '#eab308';
+      return '#64748b';
     }
 
     async function sugerir(inputId, listId) {
@@ -402,6 +421,113 @@
           <div style="margin-top:6px;">${aviso.description || aviso.headline || ''}</div>
         </div>
       `).join('');
+    }
+
+    function limpiarCapasAvisosRuta() {
+      if (avisoTramosLayer) {
+        map.removeLayer(avisoTramosLayer);
+        avisoTramosLayer = null;
+      }
+
+      if (avisoPinsLayer) {
+        map.removeLayer(avisoPinsLayer);
+        avisoPinsLayer = null;
+      }
+    }
+
+    function avisoAplicaAPunto(aviso, punto) {
+      const area = normalizeText(aviso.areaDesc || '');
+      const nombre = normalizeText(punto.nombre || '');
+      const provinciaPunto = extraerProvinciaDesdeTexto(punto.nombre || '');
+
+      if (provinciaPunto && area.includes(provinciaPunto)) {
+        return true;
+      }
+
+      if (nombre && area && nombre.includes(area)) {
+        return true;
+      }
+
+      return false;
+    }
+
+    function obtenerAvisosParaPunto(punto, avisos) {
+      return avisos.filter(aviso => avisoAplicaAPunto(aviso, punto));
+    }
+
+    function obtenerPeorAvisoParaPunto(punto, avisos) {
+      const aplicables = obtenerAvisosParaPunto(punto, avisos);
+
+      if (!aplicables.length) {
+        return null;
+      }
+
+      let peor = aplicables[0];
+
+      for (const aviso of aplicables) {
+        if (pesoNivel(aviso.nivel) > pesoNivel(peor.nivel)) {
+          peor = aviso;
+        }
+      }
+
+      return {
+        peor,
+        todos: aplicables
+      };
+    }
+
+    function pintarTramosYAvisos(coords, puntos, avisos) {
+      limpiarCapasAvisosRuta();
+
+      avisoTramosLayer = L.layerGroup().addTo(map);
+      avisoPinsLayer = L.layerGroup().addTo(map);
+
+      if (!coords.length || !puntos.length) return;
+
+      for (let i = 0; i < puntos.length - 1; i++) {
+        const puntoActual = puntos[i];
+        const puntoSiguiente = puntos[i + 1];
+
+        const startIndex = puntoActual.routeIndex;
+        const endIndex = puntoSiguiente.routeIndex;
+
+        const infoAviso = obtenerPeorAvisoParaPunto(puntoActual, avisos);
+        const nivel = infoAviso?.peor?.nivel || 'verde';
+
+        const tramoCoords = coords
+          .slice(startIndex, endIndex + 1)
+          .map(c => [c[1], c[0]]);
+
+        if (tramoCoords.length >= 2) {
+          L.polyline(tramoCoords, {
+            color: colorTramoAviso(nivel),
+            weight: 7,
+            opacity: 0.95
+          }).addTo(avisoTramosLayer);
+        }
+
+        if (infoAviso) {
+          const avisosHtml = infoAviso.todos.map(aviso => `
+            <div style="margin-bottom:8px;">
+              <div><strong>${aviso.event || 'Aviso meteorológico'}</strong></div>
+              <div>${badgeAviso(aviso.nivel)}</div>
+              <div><strong>Zona:</strong> ${aviso.areaDesc || 'No indicada'}</div>
+              <div><strong>Desde:</strong> ${aviso.onset ? new Date(aviso.onset).toLocaleString('es-ES') : 'No indicada'}</div>
+              <div><strong>Hasta:</strong> ${aviso.expires ? new Date(aviso.expires).toLocaleString('es-ES') : 'No indicada'}</div>
+              <div style="margin-top:4px;">${aviso.description || aviso.headline || 'Sin descripción'}</div>
+            </div>
+          `).join('<hr>');
+
+          L.marker([puntoActual.lat, puntoActual.lon])
+            .addTo(avisoPinsLayer)
+            .bindPopup(`
+              <div style="min-width:240px;">
+                <strong>${puntoActual.nombre || 'Punto de la ruta'}</strong><br>
+                <div style="margin-top:8px;">${avisosHtml}</div>
+              </div>
+            `);
+        }
+      }
     }
 
     async function cargarRadar() {
@@ -671,6 +797,7 @@
 
         if (rutaLayer) map.removeLayer(rutaLayer);
         markersLayer.clearLayers();
+        limpiarCapasAvisosRuta();
 
         if (rainPointsLayer) {
           map.removeLayer(rainPointsLayer);
@@ -694,14 +821,22 @@
         const coords = ruta.coordinates;
         currentRouteCoords = coords;
 
-        const paso = Math.max(1, Math.floor(coords.length / 4));
+        const paso = Math.max(1, Math.floor(coords.length / 8));
 
         const puntos = [];
         for (let i = 0; i < coords.length; i += paso) {
           const lon = coords[i][0];
           const lat = coords[i][1];
           const nombre = await reverseName(lat, lon);
-          puntos.push({ lat, lon, nombre });
+          puntos.push({ lat, lon, nombre, routeIndex: i });
+        }
+
+        const ultimoIndex = coords.length - 1;
+        if (!puntos.length || puntos[puntos.length - 1].routeIndex !== ultimoIndex) {
+          const lon = coords[ultimoIndex][0];
+          const lat = coords[ultimoIndex][1];
+          const nombre = await reverseName(lat, lon);
+          puntos.push({ lat, lon, nombre, routeIndex: ultimoIndex });
         }
 
         const provinciasRuta = extraerProvinciasRuta(origenTxt, destinoTxt, puntos);
@@ -731,11 +866,13 @@
 
         rutaLayer = L.geoJSON(ruta, {
           style: {
-            color: colorAviso(avisoGlobal),
-            weight: 6,
-            opacity: 0.9
+            color: '#94a3b8',
+            weight: 5,
+            opacity: 0.7
           }
         }).addTo(map);
+
+        pintarTramosYAvisos(coords, puntos, avisosRuta);
 
         map.fitBounds(rutaLayer.getBounds());
 
