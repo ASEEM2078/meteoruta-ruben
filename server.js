@@ -153,6 +153,70 @@ function extraerResumenPrediccion(pred) {
   };
 }
 
+function decodeXml(str) {
+  return (str || '')
+    .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .trim();
+}
+
+function extraerTag(block, tag) {
+  const re = new RegExp(`<${tag}[^>]*>([\\s\\S]*?)<\\/${tag}>`, 'i');
+  const m = block.match(re);
+  return decodeXml(m ? m[1] : '');
+}
+
+function parseFechaAemet(valor) {
+  if (!valor) return null;
+  const d = new Date(valor);
+  if (isNaN(d.getTime())) return null;
+  return d;
+}
+
+function avisoActivoEnHora(aviso, fechaSalida) {
+  const inicio = parseFechaAemet(aviso.onset);
+  const fin = parseFechaAemet(aviso.expires);
+
+  if (!fechaSalida) return true;
+  if (!inicio && !fin) return true;
+  if (inicio && fechaSalida < inicio) return false;
+  if (fin && fechaSalida > fin) return false;
+
+  return true;
+}
+
+function nivelDesdeAviso(aviso) {
+  const t = normalizeText(
+    [aviso.severity, aviso.headline, aviso.description, aviso.event].join(' ')
+  );
+
+  if (t.includes('extreme') || t.includes('rojo')) return 'rojo';
+  if (t.includes('severe') || t.includes('naranja')) return 'naranja';
+  if (t.includes('moderate') || t.includes('amarillo')) return 'amarillo';
+  return 'verde';
+}
+
+function parseAvisosCapXML(xmlText) {
+  if (!xmlText || typeof xmlText !== 'string') return [];
+  if (!xmlText.includes('<info')) return [];
+
+  const bloques = xmlText.match(/<info\b[\s\S]*?<\/info>/gi) || [];
+
+  return bloques.map(block => ({
+    areaDesc: extraerTag(block, 'areaDesc'),
+    event: extraerTag(block, 'event'),
+    headline: extraerTag(block, 'headline'),
+    description: extraerTag(block, 'description'),
+    severity: extraerTag(block, 'severity'),
+    onset: extraerTag(block, 'onset'),
+    expires: extraerTag(block, 'expires')
+  })).filter(a => a.areaDesc || a.event || a.description || a.headline);
+}
+
 app.get('/api/municipio-prediccion', async (req, res) => {
   try {
     if (!AEMET_API_KEY) {
@@ -258,14 +322,42 @@ app.get('/api/avisos-oficiales', async (req, res) => {
     }
 
     const area = req.query.area || 'esp';
-    const url = 'https://opendata.aemet.es/opendata/api/avisos_cap/ultimoelaborado/area/' + area;
+    const fechaTxt = req.query.fecha || '';
+    const fechaSalida = fechaTxt ? new Date(fechaTxt) : null;
+    const provincias = String(req.query.provincias || '')
+      .split(',')
+      .map(s => normalizeText(s))
+      .filter(Boolean);
 
-    const data = await aemetStep(url);
+    const url =
+      'https://opendata.aemet.es/opendata/api/avisos_cap/ultimoelaborado/area/' + area;
+
+    const raw = await aemetStep(url);
+    const xml = typeof raw === 'string' ? raw : JSON.stringify(raw);
+    const avisos = parseAvisosCapXML(xml);
+
+    const activos = avisos.filter(a => avisoActivoEnHora(a, fechaSalida));
+
+    const relacionados = activos.filter(a => {
+      const texto = normalizeText(
+        [a.areaDesc, a.headline, a.description, a.event].join(' ')
+      );
+
+      if (!provincias.length) return true;
+      return provincias.some(p => texto.includes(p));
+    });
+
+    const salida = relacionados.map(a => ({
+      ...a,
+      nivel: nivelDesdeAviso(a)
+    }));
 
     res.json({
       ok: true,
-      area,
-      datos: data
+      totalAvisos: avisos.length,
+      activos: activos.length,
+      relacionados: salida.length,
+      avisos: salida
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
