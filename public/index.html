@@ -216,7 +216,10 @@
     let radarLayer = null;
     let radarVisible = true;
     let radarOpacity = 0.45;
-
+    
+    let currentRouteCoords = [];
+let rainPointsLayer = null;
+    
     function ponerHoraSalidaPorDefecto() {
       const input = document.getElementById('horaSalida');
       const ahora = new Date();
