@@ -100,6 +100,11 @@
       margin-bottom: 4px;
     }
 
+    .muted {
+      color: #6b7280;
+      font-size: 12px;
+    }
+
     @media (max-width: 900px) {
       .layout { flex-direction: column; }
       .sidebar { width: 100%; min-width: 100%; }
@@ -154,6 +159,11 @@
       <div class="panel">
         <h3>Provincias detectadas en la ruta</h3>
         <div id="provinciasRuta" class="small">Sin calcular.</div>
+      </div>
+
+      <div class="panel">
+        <h3>Comunidad detectada</h3>
+        <div id="comunidadRuta" class="small">Sin calcular.</div>
       </div>
 
       <div class="panel">
@@ -307,6 +317,25 @@
       return Array.from(conjunto);
     }
 
+    function detectarComunidad(provincias) {
+      const set = new Set(provincias);
+
+      if (set.has('alicante') || set.has('castellon') || set.has('valencia')) {
+        return 'comunitat valenciana';
+      }
+      if (set.has('murcia')) return 'region de murcia';
+      if (set.has('albacete') || set.has('cuenca')) return 'castilla la mancha';
+      if (set.has('barcelona') || set.has('tarragona') || set.has('lleida') || set.has('girona')) {
+        return 'cataluna';
+      }
+      if (set.has('zaragoza') || set.has('teruel') || set.has('huesca')) {
+        return 'aragon';
+      }
+      if (set.has('madrid')) return 'comunidad de madrid';
+
+      return '';
+    }
+
     function parsearAvisosXML(xmlText) {
       if (!xmlText || typeof xmlText !== 'string') return [];
       if (!xmlText.trim().startsWith('<')) return [];
@@ -366,16 +395,17 @@
       return true;
     }
 
-    function avisosRelacionadosConProvinciasYHora(avisos, provinciasRuta, fechaSalida) {
+    function avisosRelacionadosConRuta(avisos, provinciasRuta, comunidadRuta, fechaSalida) {
       return avisos.filter(aviso => {
         const texto = normalizarTexto(
           [aviso.areaDesc, aviso.headline, aviso.description, aviso.event].join(' ')
         );
 
         const coincideProvincia = provinciasRuta.some(prov => texto.includes(prov));
+        const coincideComunidad = comunidadRuta && texto.includes(comunidadRuta);
         const coincideHora = avisoActivoEnHora(aviso, fechaSalida);
 
-        return coincideProvincia && coincideHora;
+        return coincideHora && (coincideProvincia || coincideComunidad);
       });
     }
 
@@ -392,11 +422,16 @@
       });
     }
 
-    function pintarAvisosOficiales(avisos) {
+    function pintarAvisosOficiales(avisos, comunidadRuta, fechaSalida, totalActivos) {
       const cont = document.getElementById('avisosOficiales');
 
       if (!avisos.length) {
-        cont.textContent = 'No se han encontrado avisos oficiales activos para la hora de salida en las provincias detectadas de esta ruta.';
+        cont.innerHTML =
+          'No se han encontrado avisos oficiales activos para la hora de salida en las provincias o comunidad detectadas de esta ruta.' +
+          '\n\n' +
+          'Comunidad detectada: ' + (comunidadRuta || 'No detectada') +
+          '\n' +
+          'Avisos activos totales en España a esa hora: ' + totalActivos;
         return;
       }
 
@@ -432,6 +467,7 @@
         document.getElementById("nivelAviso").innerHTML = '<span class="badge verde">Calculando</span>';
         document.getElementById("avisosOficiales").textContent = "Consultando avisos oficiales...";
         document.getElementById("provinciasRuta").textContent = "Calculando provincias...";
+        document.getElementById("comunidadRuta").textContent = "Calculando comunidad...";
 
         const origen = await geocode(origenTxt);
         const destino = await geocode(destinoTxt);
@@ -465,8 +501,12 @@
         }
 
         const provinciasRuta = extraerProvinciasRuta(origenTxt, destinoTxt, puntos);
+        const comunidadRuta = detectarComunidad(provinciasRuta);
+
         document.getElementById("provinciasRuta").innerText =
           provinciasRuta.length ? provinciasRuta.join(', ') : 'No detectadas';
+        document.getElementById("comunidadRuta").innerText =
+          comunidadRuta || 'No detectada';
 
         const q = encodeURIComponent(JSON.stringify(puntos));
         const meteoRes = await fetch('/api/ruta-meteo?puntos=' + q);
@@ -482,9 +522,11 @@
         const xmlAvisos = typeof avisosData.datos === 'string' ? avisosData.datos : '';
         const avisosParseados = parsearAvisosXML(xmlAvisos);
 
-        const avisosRuta = avisosRelacionadosConProvinciasYHora(
-          avisosParseados,
+        const avisosActivos = avisosParseados.filter(a => avisoActivoEnHora(a, fechaSalida));
+        const avisosRuta = avisosRelacionadosConRuta(
+          avisosActivos,
           provinciasRuta,
+          comunidadRuta,
           fechaSalida
         );
 
@@ -527,7 +569,13 @@
 
         document.getElementById("meteoRuta").innerText = textoMeteo || 'Sin datos meteorológicos.';
         document.getElementById("nivelAviso").innerHTML = badgeAviso(avisoGlobal);
-        pintarAvisosOficiales(avisosRuta);
+
+        pintarAvisosOficiales(
+          avisosRuta,
+          comunidadRuta,
+          fechaSalida,
+          avisosActivos.length
+        );
 
       } catch (e) {
         console.error(e);
@@ -536,6 +584,7 @@
         document.getElementById("meteoRuta").textContent = "No se pudo consultar AEMET.";
         document.getElementById("avisosOficiales").textContent = "No se pudieron consultar los avisos oficiales.";
         document.getElementById("provinciasRuta").textContent = "No se pudieron detectar provincias.";
+        document.getElementById("comunidadRuta").textContent = "No se pudo detectar la comunidad.";
       }
     }
 
