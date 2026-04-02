@@ -60,6 +60,22 @@
       background: #115e59;
     }
 
+    .btn-warning {
+      background: #b45309;
+    }
+
+    .btn-warning:hover {
+      background: #92400e;
+    }
+
+    .btn-danger {
+      background: #b91c1c;
+    }
+
+    .btn-danger:hover {
+      background: #991b1b;
+    }
+
     #map {
       flex: 1;
       height: calc(100vh - 92px);
@@ -112,10 +128,11 @@
       display: flex;
       gap: 8px;
       margin-top: 8px;
+      flex-wrap: wrap;
     }
 
     .radar-controls button {
-      flex: 1;
+      flex: 1 1 45%;
       margin-top: 0;
     }
 
@@ -167,8 +184,18 @@
         <div class="radar-controls">
           <button onclick="cargarRadar()">Actualizar radar</button>
           <button onclick="ajustarOpacidadRadar()">Cambiar opacidad</button>
+          <button class="btn-warning" onclick="toggleAnimacionRadar()">Animar radar</button>
         </div>
         <div id="radarEstado" class="muted">Radar no cargado todavía.</div>
+      </div>
+
+      <div class="panel">
+        <h3>Lluvia sobre la ruta</h3>
+        <button onclick="analizarLluviaRuta()">Analizar lluvia en ruta</button>
+        <div class="radar-controls">
+          <button class="btn-danger" onclick="limpiarAnalisisLluvia()">Limpiar análisis</button>
+        </div>
+        <div id="lluviaRutaEstado" class="muted">Todavía no analizada.</div>
       </div>
 
       <div class="panel">
@@ -216,10 +243,14 @@
     let radarLayer = null;
     let radarVisible = true;
     let radarOpacity = 0.45;
-    
+    let radarFrames = [];
+    let radarFrameIndex = 0;
+    let radarAnimationInterval = null;
+    let radarHost = 'https://tilecache.rainviewer.com';
+
     let currentRouteCoords = [];
-let rainPointsLayer = null;
-    
+    let rainPointsLayer = null;
+
     function ponerHoraSalidaPorDefecto() {
       const input = document.getElementById('horaSalida');
       const ahora = new Date();
@@ -380,38 +411,55 @@ let rainPointsLayer = null;
         const res = await fetch('https://api.rainviewer.com/public/weather-maps.json');
         const data = await res.json();
 
-        const host = data.host || 'https://tilecache.rainviewer.com';
-        const frames = data?.radar?.past || [];
+        radarHost = data.host || 'https://tilecache.rainviewer.com';
+        radarFrames = data?.radar?.past || [];
 
-        if (!frames.length) {
+        if (!radarFrames.length) {
           document.getElementById('radarEstado').textContent = 'No hay frames de radar disponibles.';
           return;
         }
 
-        const ultimoFrame = frames[frames.length - 1];
-        const tileUrl = host + ultimoFrame.path + '/256/{z}/{x}/{y}/2/1_1.png';
-
-        if (radarLayer) {
-          map.removeLayer(radarLayer);
-        }
-
-        radarLayer = L.tileLayer(tileUrl, {
-          tileSize: 256,
-          opacity: radarOpacity,
-          zIndex: 500
-        });
-
-        if (radarVisible) {
-          radarLayer.addTo(map);
-        }
-
-        const fechaFrame = new Date((ultimoFrame.time || 0) * 1000);
-        document.getElementById('radarEstado').textContent =
-          'Radar cargado. Último frame: ' + fechaFrame.toLocaleString('es-ES');
+        radarFrameIndex = radarFrames.length - 1;
+        renderRadarFrame(radarFrameIndex, false);
       } catch (e) {
         console.error(e);
         document.getElementById('radarEstado').textContent = 'No se pudo cargar el radar.';
       }
+    }
+
+    function renderRadarFrame(index, preservingMessage = true) {
+      if (!radarFrames.length) return;
+
+      const frame = radarFrames[index];
+      const tileUrl = radarHost + frame.path + '/256/{z}/{x}/{y}/2/1_1.png';
+
+      if (radarLayer) {
+        map.removeLayer(radarLayer);
+      }
+
+      radarLayer = L.tileLayer(tileUrl, {
+        tileSize: 256,
+        opacity: radarOpacity,
+        zIndex: 500
+      });
+
+      if (radarVisible) {
+        radarLayer.addTo(map);
+      }
+
+      const fechaFrame = new Date((frame.time || 0) * 1000);
+      let texto = 'Radar cargado. Frame: ' + fechaFrame.toLocaleString('es-ES');
+
+      if (radarAnimationInterval) {
+        texto += ' | Animación activa';
+      } else if (preservingMessage) {
+        texto += ' | Animación parada';
+      }
+
+      texto += ' | Opacidad: ' + radarOpacity;
+      texto += radarVisible ? ' | Radar visible' : ' | Radar oculto';
+
+      document.getElementById('radarEstado').textContent = texto;
     }
 
     function toggleRadar() {
@@ -421,11 +469,11 @@ let rainPointsLayer = null;
 
       if (radarVisible) {
         radarLayer.addTo(map);
-        document.getElementById('radarEstado').textContent += ' | Radar visible';
       } else {
         map.removeLayer(radarLayer);
-        document.getElementById('radarEstado').textContent += ' | Radar oculto';
       }
+
+      renderRadarFrame(radarFrameIndex);
     }
 
     function ajustarOpacidadRadar() {
@@ -436,7 +484,167 @@ let rainPointsLayer = null;
       else radarOpacity = 0.45;
 
       radarLayer.setOpacity(radarOpacity);
-      document.getElementById('radarEstado').textContent += ' | Opacidad: ' + radarOpacity;
+      renderRadarFrame(radarFrameIndex);
+    }
+
+    function toggleAnimacionRadar() {
+      if (!radarFrames.length) {
+        document.getElementById('radarEstado').textContent = 'Primero carga el radar.';
+        return;
+      }
+
+      if (radarAnimationInterval) {
+        clearInterval(radarAnimationInterval);
+        radarAnimationInterval = null;
+        renderRadarFrame(radarFrameIndex);
+        return;
+      }
+
+      radarAnimationInterval = setInterval(() => {
+        radarFrameIndex = (radarFrameIndex + 1) % radarFrames.length;
+        renderRadarFrame(radarFrameIndex, false);
+      }, 700);
+
+      renderRadarFrame(radarFrameIndex, false);
+    }
+
+    function sampleRoutePoints(coords, everyNPoints = 20) {
+      const sampled = [];
+
+      for (let i = 0; i < coords.length; i += everyNPoints) {
+        sampled.push(coords[i]);
+      }
+
+      if (coords.length > 0) {
+        const last = coords[coords.length - 1];
+        const alreadyIncluded =
+          sampled.length > 0 &&
+          sampled[sampled.length - 1][0] === last[0] &&
+          sampled[sampled.length - 1][1] === last[1];
+
+        if (!alreadyIncluded) {
+          sampled.push(last);
+        }
+      }
+
+      return sampled;
+    }
+
+    async function getRainForPoint(lat, lon) {
+      const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=precipitation,rain,showers&forecast_days=1`;
+
+      const res = await fetch(url);
+      if (!res.ok) {
+        throw new Error('Error consultando lluvia para el punto');
+      }
+
+      const data = await res.json();
+
+      return {
+        precipitation: data.current?.precipitation ?? 0,
+        rain: data.current?.rain ?? 0,
+        showers: data.current?.showers ?? 0
+      };
+    }
+
+    function colorLluvia(precipitation) {
+      if (precipitation >= 4) return 'red';
+      if (precipitation >= 2) return 'orange';
+      if (precipitation > 0) return 'blue';
+      return 'green';
+    }
+
+    function drawRainPoints(points) {
+      if (rainPointsLayer) {
+        map.removeLayer(rainPointsLayer);
+      }
+
+      rainPointsLayer = L.layerGroup();
+
+      points.forEach(point => {
+        if (point.precipitation > 0) {
+          let radius = 6;
+          if (point.precipitation >= 4) radius = 11;
+          else if (point.precipitation >= 2) radius = 9;
+          else if (point.precipitation >= 1) radius = 7;
+
+          const marker = L.circleMarker([point.lat, point.lon], {
+            radius,
+            color: colorLluvia(point.precipitation),
+            fillColor: colorLluvia(point.precipitation),
+            fillOpacity: 0.55,
+            weight: 1
+          }).bindPopup(`
+            <strong>Lluvia detectada</strong><br>
+            Lat: ${point.lat.toFixed(4)}<br>
+            Lon: ${point.lon.toFixed(4)}<br>
+            Precipitación: ${point.precipitation} mm<br>
+            Lluvia: ${point.rain} mm<br>
+            Chubascos: ${point.showers} mm
+          `);
+
+          rainPointsLayer.addLayer(marker);
+        }
+      });
+
+      rainPointsLayer.addTo(map);
+    }
+
+    function limpiarAnalisisLluvia() {
+      if (rainPointsLayer) {
+        map.removeLayer(rainPointsLayer);
+        rainPointsLayer = null;
+      }
+      document.getElementById('lluviaRutaEstado').textContent = 'Análisis de lluvia limpiado.';
+    }
+
+    async function analizarLluviaRuta() {
+      try {
+        if (!currentRouteCoords || currentRouteCoords.length === 0) {
+          alert('Primero calcula una ruta');
+          return;
+        }
+
+        document.getElementById('lluviaRutaEstado').textContent = 'Analizando lluvia sobre la ruta...';
+
+        const sampledPoints = sampleRoutePoints(currentRouteCoords, 20);
+        const results = [];
+
+        for (const coord of sampledPoints) {
+          const [lon, lat] = coord;
+
+          try {
+            const rainData = await getRainForPoint(lat, lon);
+
+            results.push({
+              lat,
+              lon,
+              precipitation: rainData.precipitation,
+              rain: rainData.rain,
+              showers: rainData.showers
+            });
+          } catch (error) {
+            console.error('Error consultando punto de lluvia:', lat, lon, error);
+          }
+        }
+
+        drawRainPoints(results);
+
+        const rainyPoints = results.filter(p => p.precipitation > 0);
+        const strongPoints = results.filter(p => p.precipitation >= 2);
+
+        if (rainyPoints.length === 0) {
+          document.getElementById('lluviaRutaEstado').textContent =
+            'No se detecta lluvia en los puntos analizados de la ruta.';
+        } else {
+          document.getElementById('lluviaRutaEstado').textContent =
+            'Lluvia detectada en ' + rainyPoints.length +
+            ' puntos de la ruta. Puntos con lluvia moderada/fuerte: ' + strongPoints.length + '.';
+        }
+      } catch (e) {
+        console.error(e);
+        document.getElementById('lluviaRutaEstado').textContent = 'No se pudo analizar la lluvia en la ruta.';
+      }
     }
 
     async function calcularRuta() {
@@ -456,12 +664,18 @@ let rainPointsLayer = null;
         document.getElementById("nivelAviso").innerHTML = '<span class="badge verde">Calculando</span>';
         document.getElementById("avisosOficiales").textContent = "Consultando avisos oficiales...";
         document.getElementById("provinciasRuta").textContent = "Calculando provincias...";
+        document.getElementById("lluviaRutaEstado").textContent = "Todavía no analizada.";
 
         const origen = await geocode(origenTxt);
         const destino = await geocode(destinoTxt);
 
         if (rutaLayer) map.removeLayer(rutaLayer);
         markersLayer.clearLayers();
+
+        if (rainPointsLayer) {
+          map.removeLayer(rainPointsLayer);
+          rainPointsLayer = null;
+        }
 
         const url = "https://router.project-osrm.org/route/v1/driving/" +
           origen.lon + "," + origen.lat + ";" +
@@ -478,6 +692,8 @@ let rainPointsLayer = null;
         const route = data.routes[0];
         const ruta = route.geometry;
         const coords = ruta.coordinates;
+        currentRouteCoords = coords;
+
         const paso = Math.max(1, Math.floor(coords.length / 4));
 
         const puntos = [];
@@ -554,6 +770,7 @@ let rainPointsLayer = null;
         document.getElementById("meteoRuta").textContent = "No se pudo consultar AEMET.";
         document.getElementById("avisosOficiales").textContent = "No se pudieron consultar los avisos oficiales.";
         document.getElementById("provinciasRuta").textContent = "No se pudieron detectar provincias.";
+        document.getElementById("lluviaRutaEstado").textContent = "No se pudo analizar la lluvia.";
       }
     }
 
