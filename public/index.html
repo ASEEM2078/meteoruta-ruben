@@ -85,6 +85,21 @@
       color: #374151;
     }
 
+    .alertaBox {
+      padding: 10px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      margin-bottom: 10px;
+      background: #fafafa;
+      white-space: normal;
+      line-height: 1.4;
+    }
+
+    .alertaTitulo {
+      font-weight: bold;
+      margin-bottom: 4px;
+    }
+
     @media (max-width: 900px) {
       .layout { flex-direction: column; }
       .sidebar { width: 100%; min-width: 100%; }
@@ -245,27 +260,6 @@
       return data.display_name || (lat + "," + lon);
     }
 
-    function extraerTextoAvisos(datos) {
-      if (!datos) return [];
-
-      if (Array.isArray(datos)) return datos;
-
-      if (datos.datos && Array.isArray(datos.datos)) return datos.datos;
-
-      if (typeof datos === 'string') return [datos];
-
-      return [JSON.stringify(datos)];
-    }
-
-    function detectarNivelDesdeTexto(texto) {
-      const t = normalizarTexto(texto);
-
-      if (t.includes('rojo')) return 'rojo';
-      if (t.includes('naranja')) return 'naranja';
-      if (t.includes('amarillo')) return 'amarillo';
-      return 'verde';
-    }
-
     function extraerProvinciaDesdeTexto(nombre) {
       const t = normalizarTexto(nombre);
 
@@ -286,8 +280,8 @@
 
     function extraerProvinciasRuta(origenTxt, destinoTxt, puntos) {
       const conjunto = new Set();
-
       const todos = [origenTxt, destinoTxt, ...puntos.map(p => p.nombre || '')];
+
       for (const item of todos) {
         const provincia = extraerProvinciaDesdeTexto(item);
         if (provincia) conjunto.add(provincia);
@@ -296,20 +290,76 @@
       return Array.from(conjunto);
     }
 
+    function parsearAvisosXML(xmlText) {
+      if (!xmlText || typeof xmlText !== 'string') return [];
+
+      if (!xmlText.trim().startsWith('<')) return [];
+
+      const parser = new DOMParser();
+      const xml = parser.parseFromString(xmlText, 'text/xml');
+      const infos = Array.from(xml.getElementsByTagName('info'));
+
+      return infos.map(info => {
+        const areaDesc = info.getElementsByTagName('areaDesc')[0]?.textContent?.trim() || '';
+        const event = info.getElementsByTagName('event')[0]?.textContent?.trim() || '';
+        const headline = info.getElementsByTagName('headline')[0]?.textContent?.trim() || '';
+        const description = info.getElementsByTagName('description')[0]?.textContent?.trim() || '';
+        const severity = info.getElementsByTagName('severity')[0]?.textContent?.trim() || '';
+        const onset = info.getElementsByTagName('onset')[0]?.textContent?.trim() || '';
+        const expires = info.getElementsByTagName('expires')[0]?.textContent?.trim() || '';
+
+        return {
+          areaDesc,
+          event,
+          headline,
+          description,
+          severity,
+          onset,
+          expires,
+          rawText: [areaDesc, event, headline, description, severity].join(' | ')
+        };
+      });
+    }
+
+    function detectarNivelAvisoObj(aviso) {
+      const t = normalizarTexto(
+        [aviso.severity, aviso.headline, aviso.description, aviso.event].join(' ')
+      );
+
+      if (t.includes('extreme') || t.includes('rojo')) return 'rojo';
+      if (t.includes('severe') || t.includes('naranja')) return 'naranja';
+      if (t.includes('moderate') || t.includes('amarillo')) return 'amarillo';
+      return 'verde';
+    }
+
     function avisosRelacionadosConProvincias(avisos, provinciasRuta) {
-      const relacionados = [];
+      return avisos.filter(aviso => {
+        const texto = normalizarTexto(
+          [aviso.areaDesc, aviso.headline, aviso.description, aviso.event].join(' ')
+        );
+        return provinciasRuta.some(prov => texto.includes(prov));
+      });
+    }
 
-      for (const aviso of avisos) {
-        const bruto = typeof aviso === 'string' ? aviso : JSON.stringify(aviso);
-        const texto = normalizarTexto(bruto);
+    function pintarAvisosOficiales(avisos) {
+      const cont = document.getElementById('avisosOficiales');
 
-        const coincide = provinciasRuta.some(prov => texto.includes(prov));
-        if (coincide) {
-          relacionados.push(bruto);
-        }
+      if (!avisos.length) {
+        cont.textContent = 'No se han encontrado avisos oficiales relacionados con las provincias detectadas en esta ruta.';
+        return;
       }
 
-      return relacionados;
+      cont.innerHTML = avisos.slice(0, 6).map(aviso => {
+        const nivel = detectarNivelAvisoObj(aviso);
+        return `
+          <div class="alertaBox">
+            <div class="alertaTitulo">${aviso.areaDesc || 'Zona no indicada'}</div>
+            <div>${aviso.event || 'Aviso meteorológico'}</div>
+            <div>${badgeAviso(nivel)}</div>
+            <div>${aviso.description || aviso.headline || ''}</div>
+          </div>
+        `;
+      }).join('');
     }
 
     async function calcularRuta() {
@@ -374,11 +424,12 @@
         const avisosRes = await fetch('/api/avisos-oficiales?area=esp');
         const avisosData = await avisosRes.json();
 
-        const listaAvisosBruta = extraerTextoAvisos(avisosData.datos);
-        const avisosRuta = avisosRelacionadosConProvincias(listaAvisosBruta, provinciasRuta);
+        const xmlAvisos = typeof avisosData.datos === 'string' ? avisosData.datos : '';
+        const avisosParseados = parsearAvisosXML(xmlAvisos);
+        const avisosRuta = avisosRelacionadosConProvincias(avisosParseados, provinciasRuta);
 
         const coloresPrediccion = meteoData.puntos.map(p => p.avisoColor || 'verde');
-        const coloresAvisos = avisosRuta.map(a => detectarNivelDesdeTexto(a));
+        const coloresAvisos = avisosRuta.map(a => detectarNivelAvisoObj(a));
         const avisoGlobal = peorAviso([...coloresPrediccion, ...coloresAvisos]);
 
         rutaLayer = L.geoJSON(ruta, {
@@ -410,13 +461,7 @@
 
         document.getElementById("meteoRuta").innerText = textoMeteo || 'Sin datos meteorológicos.';
         document.getElementById("nivelAviso").innerHTML = badgeAviso(avisoGlobal);
-
-        if (avisosRuta.length > 0) {
-          document.getElementById("avisosOficiales").innerText = avisosRuta.slice(0, 5).join('\n\n');
-        } else {
-          document.getElementById("avisosOficiales").innerText =
-            "No se han encontrado avisos oficiales relacionados con las provincias detectadas en esta ruta.";
-        }
+        pintarAvisosOficiales(avisosRuta);
 
       } catch (e) {
         console.error(e);
