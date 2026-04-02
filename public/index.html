@@ -129,6 +129,11 @@
         <datalist id="listaDestino"></datalist>
       </div>
 
+      <div class="field">
+        <label>Hora de salida</label>
+        <input id="horaSalida" type="datetime-local">
+      </div>
+
       <button onclick="calcularRuta()">Calcular ruta</button>
 
       <div class="panel">
@@ -172,6 +177,18 @@
     let markersLayer = L.layerGroup().addTo(map);
     let tOrigen = null;
     let tDestino = null;
+
+    function ponerHoraSalidaPorDefecto() {
+      const input = document.getElementById('horaSalida');
+      const ahora = new Date();
+      ahora.setMinutes(0, 0, 0);
+      const local = new Date(ahora.getTime() - ahora.getTimezoneOffset() * 60000)
+        .toISOString()
+        .slice(0, 16);
+      input.value = local;
+    }
+
+    ponerHoraSalidaPorDefecto();
 
     function colorAviso(nivel) {
       if (nivel === 'rojo') return '#dc2626';
@@ -292,7 +309,6 @@
 
     function parsearAvisosXML(xmlText) {
       if (!xmlText || typeof xmlText !== 'string') return [];
-
       if (!xmlText.trim().startsWith('<')) return [];
 
       const parser = new DOMParser();
@@ -315,8 +331,7 @@
           description,
           severity,
           onset,
-          expires,
-          rawText: [areaDesc, event, headline, description, severity].join(' | ')
+          expires
         };
       });
     }
@@ -332,12 +347,48 @@
       return 'verde';
     }
 
-    function avisosRelacionadosConProvincias(avisos, provinciasRuta) {
+    function parseFechaAemet(valor) {
+      if (!valor) return null;
+      const d = new Date(valor);
+      if (isNaN(d.getTime())) return null;
+      return d;
+    }
+
+    function avisoActivoEnHora(aviso, fechaSalida) {
+      const inicio = parseFechaAemet(aviso.onset);
+      const fin = parseFechaAemet(aviso.expires);
+
+      if (!fechaSalida) return true;
+      if (!inicio && !fin) return true;
+      if (inicio && fechaSalida < inicio) return false;
+      if (fin && fechaSalida > fin) return false;
+
+      return true;
+    }
+
+    function avisosRelacionadosConProvinciasYHora(avisos, provinciasRuta, fechaSalida) {
       return avisos.filter(aviso => {
         const texto = normalizarTexto(
           [aviso.areaDesc, aviso.headline, aviso.description, aviso.event].join(' ')
         );
-        return provinciasRuta.some(prov => texto.includes(prov));
+
+        const coincideProvincia = provinciasRuta.some(prov => texto.includes(prov));
+        const coincideHora = avisoActivoEnHora(aviso, fechaSalida);
+
+        return coincideProvincia && coincideHora;
+      });
+    }
+
+    function formatearFechaAviso(valor) {
+      const d = parseFechaAemet(valor);
+      if (!d) return 'No indicada';
+
+      return d.toLocaleString('es-ES', {
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
       });
     }
 
@@ -345,7 +396,7 @@
       const cont = document.getElementById('avisosOficiales');
 
       if (!avisos.length) {
-        cont.textContent = 'No se han encontrado avisos oficiales relacionados con las provincias detectadas en esta ruta.';
+        cont.textContent = 'No se han encontrado avisos oficiales activos para la hora de salida en las provincias detectadas de esta ruta.';
         return;
       }
 
@@ -354,9 +405,11 @@
         return `
           <div class="alertaBox">
             <div class="alertaTitulo">${aviso.areaDesc || 'Zona no indicada'}</div>
-            <div>${aviso.event || 'Aviso meteorológico'}</div>
+            <div><strong>Fenómeno:</strong> ${aviso.event || 'Aviso meteorológico'}</div>
             <div>${badgeAviso(nivel)}</div>
-            <div>${aviso.description || aviso.headline || ''}</div>
+            <div><strong>Desde:</strong> ${formatearFechaAviso(aviso.onset)}</div>
+            <div><strong>Hasta:</strong> ${formatearFechaAviso(aviso.expires)}</div>
+            <div style="margin-top:6px;">${aviso.description || aviso.headline || ''}</div>
           </div>
         `;
       }).join('');
@@ -366,6 +419,8 @@
       try {
         const origenTxt = document.getElementById("origen").value.trim();
         const destinoTxt = document.getElementById("destino").value.trim();
+        const horaSalidaTxt = document.getElementById("horaSalida").value;
+        const fechaSalida = horaSalidaTxt ? new Date(horaSalidaTxt) : null;
 
         if (!origenTxt || !destinoTxt) {
           alert("Introduce origen y destino");
@@ -426,11 +481,19 @@
 
         const xmlAvisos = typeof avisosData.datos === 'string' ? avisosData.datos : '';
         const avisosParseados = parsearAvisosXML(xmlAvisos);
-        const avisosRuta = avisosRelacionadosConProvincias(avisosParseados, provinciasRuta);
+
+        const avisosRuta = avisosRelacionadosConProvinciasYHora(
+          avisosParseados,
+          provinciasRuta,
+          fechaSalida
+        );
 
         const coloresPrediccion = meteoData.puntos.map(p => p.avisoColor || 'verde');
         const coloresAvisos = avisosRuta.map(a => detectarNivelAvisoObj(a));
-        const avisoGlobal = peorAviso([...coloresPrediccion, ...coloresAvisos]);
+
+        const avisoGlobal = avisosRuta.length
+          ? peorAviso(coloresAvisos)
+          : peorAviso(coloresPrediccion);
 
         rutaLayer = L.geoJSON(ruta, {
           style: {
@@ -457,7 +520,10 @@
 
         document.getElementById("resumen").innerText =
           "Distancia: " + (route.distance / 1000).toFixed(1) + " km\n" +
-          "Duración estimada: " + Math.round(route.duration / 60) + " min";
+          "Duración estimada: " + Math.round(route.duration / 60) + " min\n" +
+          "Hora de salida: " + (fechaSalida
+            ? fechaSalida.toLocaleString('es-ES')
+            : 'No indicada');
 
         document.getElementById("meteoRuta").innerText = textoMeteo || 'Sin datos meteorológicos.';
         document.getElementById("nivelAviso").innerHTML = badgeAviso(avisoGlobal);
