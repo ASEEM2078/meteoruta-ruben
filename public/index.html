@@ -64,8 +64,8 @@
     }
 
     .sidebar {
-      width: 360px;
-      min-width: 360px;
+      width: 380px;
+      min-width: 380px;
       background: white;
       padding: 16px;
       border-right: 1px solid #ddd;
@@ -262,6 +262,21 @@
       border: 1px solid rgba(0,0,0,0.1);
     }
 
+    .forecast-card {
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      padding: 10px;
+      margin-bottom: 10px;
+      background: #fafafa;
+      white-space: normal;
+      line-height: 1.4;
+    }
+
+    .forecast-title {
+      font-weight: bold;
+      margin-bottom: 6px;
+    }
+
     @media (max-width: 900px) {
       .layout { flex-direction: column; }
       .sidebar { width: 100%; min-width: 100%; }
@@ -339,6 +354,21 @@
       </div>
 
       <div class="panel">
+        <h3>Meteo durante el trayecto</h3>
+        <div id="meteoTrayecto" class="small">Todavía no calculada.</div>
+      </div>
+
+      <div class="panel">
+        <h3>Llegada al destino</h3>
+        <div id="meteoLlegada" class="small">Todavía no calculada.</div>
+      </div>
+
+      <div class="panel">
+        <h3>Próximos días en destino</h3>
+        <div id="meteoDestinoDias" class="small">Todavía no calculada.</div>
+      </div>
+
+      <div class="panel">
         <h3>Lluvia sobre la ruta</h3>
         <button onclick="analizarLluviaRuta()">Comprobar lluvia en ruta</button>
         <div class="radar-controls">
@@ -410,6 +440,9 @@
     let radarHost = 'https://tilecache.rainviewer.com';
 
     let currentRouteCoords = [];
+    let currentRouteDurationSec = 0;
+    let currentFechaSalida = null;
+    let currentDestino = null;
     let rainPointsLayer = null;
 
     let avisoTramosLayer = null;
@@ -501,6 +534,24 @@
       };
 
       legendControl.addTo(map);
+    }
+
+    function formatDateTimeEs(value) {
+      if (!value) return 'No disponible';
+      const d = new Date(value);
+      if (isNaN(d.getTime())) return 'No disponible';
+      return d.toLocaleString('es-ES');
+    }
+
+    function formatDateEs(value) {
+      if (!value) return 'No disponible';
+      const d = new Date(value);
+      if (isNaN(d.getTime())) return value;
+      return d.toLocaleDateString('es-ES', {
+        weekday: 'short',
+        day: '2-digit',
+        month: '2-digit'
+      });
     }
 
     async function sugerir(inputId, listId) {
@@ -834,7 +885,7 @@
       map.fitBounds(bounds, { padding: [30, 30] });
     }
 
-    function actualizarEstadoRuta(avisoGlobal, provinciasRuta) {
+    function actualizarEstadoRuta(avisoGlobal, provinciasRuta, fechaLlegada = null) {
       const provinciasTexto = provinciasRuta.length ? provinciasRuta.join(', ') : 'No detectadas';
       const lluviaTexto = document.getElementById('lluviaRutaEstado').textContent || 'No analizada';
 
@@ -847,7 +898,8 @@
         <strong>Riesgo máximo:</strong> ${textoRiesgo}<br>
         <strong>Tramos conflictivos:</strong> ${tramosConflictivos.length}<br>
         <strong>Provincias:</strong> ${provinciasTexto}<br>
-        <strong>Lluvia en ruta:</strong> ${lluviaTexto}
+        <strong>Lluvia en ruta:</strong> ${lluviaTexto}<br>
+        <strong>Llegada estimada:</strong> ${fechaLlegada ? fechaLlegada.toLocaleString('es-ES') : 'No disponible'}
       `;
     }
 
@@ -1097,12 +1149,118 @@
 
         const provinciasTexto = document.getElementById('provinciasRuta').innerText;
         const provinciasRuta = provinciasTexto === 'No detectadas' ? [] : provinciasTexto.split(',').map(x => x.trim());
-        actualizarEstadoRuta(avisoGlobal, provinciasRuta);
+        const fechaLlegada = currentFechaSalida && currentRouteDurationSec
+          ? new Date(currentFechaSalida.getTime() + currentRouteDurationSec * 1000)
+          : null;
+
+        actualizarEstadoRuta(avisoGlobal, provinciasRuta, fechaLlegada);
 
       } catch (e) {
         console.error(e);
         document.getElementById('lluviaRutaEstado').textContent = 'No se pudo analizar la lluvia en la ruta.';
       }
+    }
+
+    function pintarTrayectoHorario(puntos) {
+      const cont = document.getElementById('meteoTrayecto');
+
+      if (!Array.isArray(puntos) || !puntos.length) {
+        cont.innerHTML = 'Sin previsión horaria de trayecto.';
+        return;
+      }
+
+      cont.innerHTML = puntos.map((p, idx) => `
+        <div class="forecast-card">
+          <div class="forecast-title">Punto ${idx + 1}: ${p.nombre || 'Ruta'}</div>
+          <div><strong>Hora estimada:</strong> ${formatDateTimeEs(p.horaPaso)}</div>
+          <div><strong>Estado:</strong> ${p.estado || 'Sin dato'}</div>
+          <div><strong>Temperatura:</strong> ${p.temperatura ?? '—'}°C</div>
+          <div><strong>Prob. lluvia:</strong> ${p.probLluvia ?? '—'}%</div>
+          <div><strong>Precipitación:</strong> ${p.precipitacion ?? '—'} mm</div>
+          <div><strong>Viento:</strong> ${p.viento ?? '—'} km/h</div>
+        </div>
+      `).join('');
+    }
+
+    function pintarLlegadaDestino(llegada) {
+      const cont = document.getElementById('meteoLlegada');
+
+      if (!llegada) {
+        cont.innerHTML = 'Sin previsión de llegada.';
+        return;
+      }
+
+      cont.innerHTML = `
+        <div class="forecast-card">
+          <div class="forecast-title">Condiciones a la llegada</div>
+          <div><strong>Hora estimada:</strong> ${formatDateTimeEs(llegada.hora)}</div>
+          <div><strong>Estado:</strong> ${llegada.estado || 'Sin dato'}</div>
+          <div><strong>Temperatura:</strong> ${llegada.temperatura ?? '—'}°C</div>
+          <div><strong>Prob. lluvia:</strong> ${llegada.probLluvia ?? '—'}%</div>
+          <div><strong>Precipitación:</strong> ${llegada.precipitacion ?? '—'} mm</div>
+          <div><strong>Viento:</strong> ${llegada.viento ?? '—'} km/h</div>
+        </div>
+      `;
+    }
+
+    function pintarDiasDestino(dias) {
+      const cont = document.getElementById('meteoDestinoDias');
+
+      if (!Array.isArray(dias) || !dias.length) {
+        cont.innerHTML = 'Sin previsión de días en destino.';
+        return;
+      }
+
+      cont.innerHTML = dias.map(d => `
+        <div class="forecast-card">
+          <div class="forecast-title">${formatDateEs(d.fecha)}</div>
+          <div><strong>Estado:</strong> ${d.estado || 'Sin dato'}</div>
+          <div><strong>Máxima:</strong> ${d.tempMax ?? '—'}°C</div>
+          <div><strong>Mínima:</strong> ${d.tempMin ?? '—'}°C</div>
+          <div><strong>Prob. lluvia máx.:</strong> ${d.probLluviaMax ?? '—'}%</div>
+          <div><strong>Viento máx.:</strong> ${d.vientoMax ?? '—'} km/h</div>
+        </div>
+      `).join('');
+    }
+
+    async function cargarMeteoAvanzada(puntos, fechaSalida, duracionSeg, destino) {
+      const q = encodeURIComponent(JSON.stringify(puntos));
+      const fechaSalidaIso = encodeURIComponent(fechaSalida.toISOString());
+
+      const meteoRes = await fetch(
+        '/api/ruta-meteo?puntos=' + q +
+        '&fechaSalida=' + fechaSalidaIso +
+        '&duracionSeg=' + encodeURIComponent(duracionSeg)
+      );
+      const meteoData = await meteoRes.json();
+
+      if (meteoData.error) {
+        throw new Error(meteoData.error);
+      }
+
+      const fechaLlegada = new Date(fechaSalida.getTime() + duracionSeg * 1000);
+
+      const destinoRes = await fetch(
+        '/api/destino-meteo?lat=' + encodeURIComponent(destino.lat) +
+        '&lon=' + encodeURIComponent(destino.lon) +
+        '&fechaLlegada=' + encodeURIComponent(fechaLlegada.toISOString()) +
+        '&dias=5'
+      );
+      const destinoData = await destinoRes.json();
+
+      if (destinoData.error) {
+        throw new Error(destinoData.error);
+      }
+
+      pintarTrayectoHorario(meteoData.puntos || []);
+      pintarLlegadaDestino(destinoData.llegada);
+      pintarDiasDestino(destinoData.dias || []);
+
+      return {
+        meteoRuta: meteoData,
+        meteoDestino: destinoData,
+        fechaLlegada
+      };
     }
 
     async function calcularRuta() {
@@ -1117,9 +1275,17 @@
           return;
         }
 
+        if (!fechaSalida || isNaN(fechaSalida.getTime())) {
+          alert("Introduce una hora de salida válida");
+          return;
+        }
+
         document.getElementById("estadoRuta").textContent = "Calculando estado de la ruta...";
         document.getElementById("resumen").textContent = "Calculando...";
         document.getElementById("meteoRuta").textContent = "Consultando datos meteorológicos...";
+        document.getElementById("meteoTrayecto").textContent = "Consultando meteo horaria del trayecto...";
+        document.getElementById("meteoLlegada").textContent = "Consultando previsión de llegada...";
+        document.getElementById("meteoDestinoDias").textContent = "Consultando días en destino...";
         document.getElementById("nivelAviso").innerHTML = '<span class="badge verde">Calculando</span>';
         document.getElementById("avisosOficiales").textContent = "Consultando avisos oficiales...";
         document.getElementById("provinciasRuta").textContent = "Calculando provincias...";
@@ -1128,6 +1294,9 @@
 
         const origen = await geocode(origenTxt);
         const destino = await geocode(destinoTxt);
+
+        currentFechaSalida = fechaSalida;
+        currentDestino = destino;
 
         if (rutaLayer) map.removeLayer(rutaLayer);
         markersLayer.clearLayers();
@@ -1154,8 +1323,8 @@
         const ruta = route.geometry;
         const coords = ruta.coordinates;
         currentRouteCoords = coords;
+        currentRouteDurationSec = route.duration;
 
-        // LIMITAR PETICIONES A AEMET: máximo 5 puntos intermedios + último si no coincide
         const maxPuntosMeteo = 5;
         const paso = Math.max(1, Math.floor(coords.length / maxPuntosMeteo));
 
@@ -1183,16 +1352,10 @@
         document.getElementById("provinciasRuta").innerText =
           provinciasRuta.length ? provinciasRuta.join(', ') : 'No detectadas';
 
-        const q = encodeURIComponent(JSON.stringify(puntos));
-        const meteoRes = await fetch('/api/ruta-meteo?puntos=' + q);
-        const meteoData = await meteoRes.json();
+        const meteoAvanzada = await cargarMeteoAvanzada(puntos, fechaSalida, route.duration, destino);
 
-        if (meteoData.error) {
-          throw new Error(meteoData.error);
-        }
-
+        const fechaParam = encodeURIComponent(fechaSalida.toISOString());
         const provParam = encodeURIComponent(provinciasRuta.join(','));
-        const fechaParam = encodeURIComponent(fechaSalida ? fechaSalida.toISOString() : '');
         const avisosRes = await fetch('/api/avisos-oficiales?area=esp&provincias=' + provParam + '&fecha=' + fechaParam);
         const avisosData = await avisosRes.json();
 
@@ -1217,29 +1380,36 @@
         map.fitBounds(rutaLayer.getBounds());
 
         let textoMeteo = '';
-
-        meteoData.puntos.forEach((p, idx) => {
+        (meteoAvanzada.meteoRuta.puntos || []).forEach((p, idx) => {
           const popup = p.error
-            ? '<strong>Punto ' + (idx + 1) + '</strong><br>' + p.nombre + '<br>' + p.error
-            : '<strong>' + p.nombre + '</strong><br>' + p.texto.replace(/\n/g, '<br>');
+            ? '<strong>Punto ' + (idx + 1) + '</strong><br>' + (p.nombre || 'Ruta') + '<br>' + p.error
+            : '<strong>' + (p.nombre || 'Ruta') + '</strong><br>' +
+              'Hora estimada: ' + formatDateTimeEs(p.horaPaso) + '<br>' +
+              'Estado: ' + (p.estado || 'Sin dato') + '<br>' +
+              'Temperatura: ' + (p.temperatura ?? '—') + '°C<br>' +
+              'Prob. lluvia: ' + (p.probLluvia ?? '—') + '%';
 
           L.marker([p.lat, p.lon]).addTo(markersLayer).bindPopup(popup);
 
-          textoMeteo += (idx + 1) + '. ' + p.nombre + '\n';
-          textoMeteo += p.error ? (p.error + '\n\n') : (p.texto + '\n\n');
+          textoMeteo += (idx + 1) + '. ' + (p.nombre || 'Ruta') + '\n';
+          textoMeteo += 'Hora estimada: ' + formatDateTimeEs(p.horaPaso) + '\n';
+          textoMeteo += 'Estado: ' + (p.estado || 'Sin dato') + '\n';
+          textoMeteo += 'Temperatura: ' + (p.temperatura ?? '—') + '°C\n';
+          textoMeteo += 'Prob. lluvia: ' + (p.probLluvia ?? '—') + '%\n';
+          textoMeteo += 'Precipitación: ' + (p.precipitacion ?? '—') + ' mm\n';
+          textoMeteo += 'Viento: ' + (p.viento ?? '—') + ' km/h\n\n';
         });
 
         document.getElementById("resumen").innerText =
           "Distancia: " + (route.distance / 1000).toFixed(1) + " km\n" +
           "Duración estimada: " + Math.round(route.duration / 60) + " min\n" +
-          "Hora de salida: " + (fechaSalida
-            ? fechaSalida.toLocaleString('es-ES')
-            : 'No indicada');
+          "Hora de salida: " + fechaSalida.toLocaleString('es-ES') + "\n" +
+          "Hora estimada de llegada: " + meteoAvanzada.fechaLlegada.toLocaleString('es-ES');
 
         document.getElementById("meteoRuta").innerText = textoMeteo || 'Sin datos meteorológicos.';
         document.getElementById("nivelAviso").innerHTML = badgeAviso(avisoGlobal);
         pintarAvisosOficiales(avisosRuta, avisosData);
-        actualizarEstadoRuta(avisoGlobal, provinciasRuta);
+        actualizarEstadoRuta(avisoGlobal, provinciasRuta, meteoAvanzada.fechaLlegada);
 
       } catch (e) {
         console.error(e);
@@ -1247,6 +1417,9 @@
         document.getElementById("estadoRuta").textContent = "No se pudo calcular el estado de la ruta.";
         document.getElementById("resumen").textContent = "No se pudo calcular.";
         document.getElementById("meteoRuta").textContent = "No se pudo consultar la meteorología.";
+        document.getElementById("meteoTrayecto").textContent = "No se pudo calcular la meteo horaria.";
+        document.getElementById("meteoLlegada").textContent = "No se pudo calcular la llegada.";
+        document.getElementById("meteoDestinoDias").textContent = "No se pudo calcular la previsión de destino.";
         document.getElementById("avisosOficiales").textContent = "No se pudieron consultar los avisos oficiales.";
         document.getElementById("provinciasRuta").textContent = "No se pudieron detectar provincias.";
         document.getElementById("lluviaRutaEstado").textContent = "No se pudo analizar la lluvia.";
