@@ -5,6 +5,7 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const AEMET_API_KEY = process.env.AEMET_API_KEY || '';
 
+app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 let municipiosCache = null;
@@ -391,6 +392,64 @@ function buildArrivalText(forecast, horaLlegada) {
   );
 }
 
+function clamp(value, min, max) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function getRiskLevel(score) {
+  if (score >= 75) return 'muy alto';
+  if (score >= 50) return 'alto';
+  if (score >= 25) return 'moderado';
+  return 'bajo';
+}
+
+function getColorFromRisk(score) {
+  if (score >= 75) return 'rojo';
+  if (score >= 50) return 'naranja';
+  if (score >= 25) return 'amarillo';
+  return 'verde';
+}
+
+function scoreFromHourlyForecast(hourlyForecast) {
+  if (!hourlyForecast) {
+    return {
+      score: 0,
+      level: 'bajo',
+      color: 'verde'
+    };
+  }
+
+  const prob = Number(hourlyForecast.precipitationProbability ?? 0);
+  const precip = Number(hourlyForecast.precipitation ?? 0);
+  const wind = Number(hourlyForecast.windSpeed ?? 0);
+
+  let score = 0;
+
+  score += clamp(prob * 0.6, 0, 60);
+  score += clamp(precip * 10, 0, 25);
+  score += clamp(wind * 0.3, 0, 15);
+
+  score = Math.round(clamp(score, 0, 100));
+
+  return {
+    score,
+    level: getRiskLevel(score),
+    color: getColorFromRisk(score)
+  };
+}
+
+function buildRiskSummary(nombre, hourlyForecast, horaPaso, risk) {
+  return (
+    'Punto: ' + nombre + '\n' +
+    'Hora estimada: ' + horaPaso.toLocaleString('es-ES') + '\n' +
+    'Riesgo: ' + risk.level.toUpperCase() + ' (' + risk.score + '/100)\n' +
+    'Estado: ' + (hourlyForecast?.weatherText ?? 'Sin dato') + '\n' +
+    'Probabilidad de precipitación: ' + (hourlyForecast?.precipitationProbability ?? '—') + '%\n' +
+    'Precipitación: ' + (hourlyForecast?.precipitation ?? '—') + ' mm\n' +
+    'Viento: ' + (hourlyForecast?.windSpeed ?? '—') + ' km/h'
+  );
+}
+
 app.get('/api/municipio-prediccion', async (req, res) => {
   try {
     if (!AEMET_API_KEY) {
@@ -588,6 +647,183 @@ app.get('/api/avisos-oficiales', async (req, res) => {
       activos: activos.length,
       relacionados: salida.length,
       avisos: salida
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/route/analyze', async (req, res) => {
+  try {
+    const puntos = Array.isArray(req.body.puntos) ? req.body.puntos : [];
+    const fechaSalidaTxt = req.body.fechaSalida || '';
+    const duracionSeg = Number(req.body.duracionSeg || 0);
+
+    if (!puntos.length) {
+      return res.status(400).json({ error: 'Faltan puntos de ruta' });
+    }
+
+    if (!fechaSalidaTxt) {
+      return res.status(400).json({ error: 'Falta fechaSalida' });
+    }
+
+    const fechaSalida = new Date(fechaSalidaTxt);
+    if (Number.isNaN(fechaSalida.getTime())) {
+      return res.status(400).json({ error: 'fechaSalida inválida' });
+    }
+
+    const lastRouteIndex = Math.max(
+      ...puntos.map(p => Number.isFinite(Number(p.routeIndex)) ? Number(p.routeIndex) : 0),
+      1
+    );
+
+    const resultados = [];
+
+    for (let i = 0; i < puntos.length; i++) {
+      const p = puntos[i];
+      const lat = Number(p.lat);
+      const lon = Number(p.lon);
+
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+        resultados.push({
+          nombre: p.nombre || `Punto ${i + 1}`,
+          lat,
+          lon,
+          error: 'Coordenadas inválidas'
+        });
+        continue;
+      }
+
+      const progress = Number.isFinite(Number(p.routeIndex))
+        ? Number(p.routeIndex) / lastRouteIndex
+        : (puntos.length === 1 ? 1 : i / (puntos.length - 1));
+
+      const horaPaso = new Date(fechaSalida.getTime() + Math.max(0, duracionSeg) * 1000 * progress);
+      const forecast = await getOpenMeteoForecast(lat, lon, 5);
+      const hourlyForecast = pickNearestHourlyForecast(forecast, horaPaso);
+      const risk = scoreFromHourlyForecast(hourlyForecast);
+
+      resultados.push({
+        nombre: p.nombre || `Punto ${i + 1}`,
+        lat,
+        lon,
+        horaPaso: horaPaso.toISOString(),
+        riesgo: risk.score,
+        nivelRiesgo: risk.level,
+        colorRiesgo: risk.color,
+        texto: buildRiskSummary(p.nombre || `Punto ${i + 1}`, hourlyForecast, horaPaso, risk),
+        temperatura: hourlyForecast?.temperature ?? null,
+        probLluvia: hourlyForecast?.precipitationProbability ?? null,
+        precipitacion: hourlyForecast?.precipitation ?? null,
+        viento: hourlyForecast?.windSpeed ?? null,
+        estado: hourlyForecast?.weatherText ?? 'Sin dato'
+      });
+    }
+
+    const validos = resultados.filter(p => typeof p.riesgo === 'number');
+    const riesgoMedio = validos.length
+      ? Math.round(validos.reduce((acc, p) => acc + p.riesgo, 0) / validos.length)
+      : 0;
+
+    const peorTramo = validos.length
+      ? validos.reduce((max, p) => p.riesgo > max.riesgo ? p : max, validos[0])
+      : null;
+
+    res.json({
+      ok: true,
+      salida: fechaSalida.toISOString(),
+      riesgoGlobal: riesgoMedio,
+      nivelGlobal: getRiskLevel(riesgoMedio),
+      colorGlobal: getColorFromRisk(riesgoMedio),
+      peorTramo,
+      resumen:
+        peorTramo
+          ? `La ruta presenta riesgo ${getRiskLevel(riesgoMedio)}. El punto más comprometido es ${peorTramo.nombre} con riesgo ${peorTramo.riesgo}/100.`
+          : 'No se pudo calcular el riesgo de la ruta.',
+      puntos: resultados
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/api/route/best-departure', async (req, res) => {
+  try {
+    const puntos = Array.isArray(req.body.puntos) ? req.body.puntos : [];
+    const fechaSalidaTxt = req.body.fechaSalida || '';
+    const duracionSeg = Number(req.body.duracionSeg || 0);
+    const horasVentana = Math.min(Math.max(Number(req.body.horasVentana || 6), 1), 12);
+    const pasoMinutos = Math.min(Math.max(Number(req.body.pasoMinutos || 30), 15), 120);
+
+    if (!puntos.length) {
+      return res.status(400).json({ error: 'Faltan puntos de ruta' });
+    }
+
+    if (!fechaSalidaTxt) {
+      return res.status(400).json({ error: 'Falta fechaSalida' });
+    }
+
+    const fechaBase = new Date(fechaSalidaTxt);
+    if (Number.isNaN(fechaBase.getTime())) {
+      return res.status(400).json({ error: 'fechaSalida inválida' });
+    }
+
+    const lastRouteIndex = Math.max(
+      ...puntos.map(p => Number.isFinite(Number(p.routeIndex)) ? Number(p.routeIndex) : 0),
+      1
+    );
+
+    const candidatos = [];
+
+    for (let minutos = 0; minutos <= horasVentana * 60; minutos += pasoMinutos) {
+      const salida = new Date(fechaBase.getTime() + minutos * 60 * 1000);
+      const riesgos = [];
+
+      for (let i = 0; i < puntos.length; i++) {
+        const p = puntos[i];
+        const lat = Number(p.lat);
+        const lon = Number(p.lon);
+
+        if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+
+        const progress = Number.isFinite(Number(p.routeIndex))
+          ? Number(p.routeIndex) / lastRouteIndex
+          : (puntos.length === 1 ? 1 : i / (puntos.length - 1));
+
+        const horaPaso = new Date(salida.getTime() + Math.max(0, duracionSeg) * 1000 * progress);
+        const forecast = await getOpenMeteoForecast(lat, lon, 5);
+        const hourlyForecast = pickNearestHourlyForecast(forecast, horaPaso);
+        const risk = scoreFromHourlyForecast(hourlyForecast);
+
+        riesgos.push(risk.score);
+      }
+
+      const riesgoMedio = riesgos.length
+        ? Math.round(riesgos.reduce((acc, n) => acc + n, 0) / riesgos.length)
+        : 0;
+
+      candidatos.push({
+        salida: salida.toISOString(),
+        riesgoGlobal: riesgoMedio,
+        nivelGlobal: getRiskLevel(riesgoMedio),
+        colorGlobal: getColorFromRisk(riesgoMedio)
+      });
+    }
+
+    candidatos.sort((a, b) => a.riesgoGlobal - b.riesgoGlobal);
+
+    const mejor = candidatos[0] || null;
+    const peor = candidatos[candidatos.length - 1] || null;
+
+    res.json({
+      ok: true,
+      mejor,
+      peor,
+      alternativas: candidatos.slice(0, 5),
+      resumen:
+        mejor
+          ? `La mejor hora de salida es ${new Date(mejor.salida).toLocaleString('es-ES')} con riesgo ${mejor.riesgoGlobal}/100.`
+          : 'No se pudo calcular la mejor hora de salida.'
     });
   } catch (error) {
     res.status(500).json({ error: error.message });
