@@ -10,6 +10,8 @@ app.use(express.static(path.join(__dirname, 'public')));
 let municipiosCache = null;
 let municipiosCacheTime = 0;
 
+const memoryCache = new Map();
+
 function normalizeText(text) {
   return (text || '')
     .toLowerCase()
@@ -41,7 +43,37 @@ function ensureArray(value) {
   return null;
 }
 
-async function aemetStep(url) {
+function getCache(key) {
+  const item = memoryCache.get(key);
+  if (!item) return null;
+
+  if (Date.now() > item.expiresAt) {
+    memoryCache.delete(key);
+    return null;
+  }
+
+  return item.value;
+}
+
+function setCache(key, value, ttlMs) {
+  memoryCache.set(key, {
+    value,
+    expiresAt: Date.now() + ttlMs
+  });
+}
+
+async function fetchJson(url, options = {}) {
+  const res = await fetch(url, options);
+  if (!res.ok) {
+    throw new Error(`Error HTTP ${res.status} en ${url}`);
+  }
+  return res.json();
+}
+
+async function aemetStep(url, ttlMs = 10 * 60 * 1000) {
+  const cached = getCache(`aemet:${url}`);
+  if (cached) return cached;
+
   const res = await fetch(url, {
     headers: {
       accept: 'application/json',
@@ -66,7 +98,10 @@ async function aemetStep(url) {
   }
 
   const text = await dataRes.text();
-  return tryParseJSON(text);
+  const parsed = tryParseJSON(text);
+
+  setCache(`aemet:${url}`, parsed, ttlMs);
+  return parsed;
 }
 
 async function getMunicipios() {
@@ -77,7 +112,7 @@ async function getMunicipios() {
   }
 
   const url = 'https://opendata.aemet.es/opendata/api/maestro/municipios';
-  const raw = await aemetStep(url);
+  const raw = await aemetStep(url, 12 * 60 * 60 * 1000);
   const arr = ensureArray(raw);
 
   if (!arr) {
@@ -217,6 +252,145 @@ function parseAvisosCapXML(xmlText) {
   })).filter(a => a.areaDesc || a.event || a.description || a.headline);
 }
 
+function weatherCodeToText(code) {
+  const map = {
+    0: 'Despejado',
+    1: 'Poco nuboso',
+    2: 'Intervalos nubosos',
+    3: 'Cubierto',
+    45: 'Niebla',
+    48: 'Niebla con cencellada',
+    51: 'Llovizna débil',
+    53: 'Llovizna moderada',
+    55: 'Llovizna intensa',
+    56: 'Llovizna helada débil',
+    57: 'Llovizna helada intensa',
+    61: 'Lluvia débil',
+    63: 'Lluvia moderada',
+    65: 'Lluvia intensa',
+    66: 'Lluvia helada débil',
+    67: 'Lluvia helada intensa',
+    71: 'Nieve débil',
+    73: 'Nieve moderada',
+    75: 'Nieve intensa',
+    77: 'Granitos de nieve',
+    80: 'Chubascos débiles',
+    81: 'Chubascos moderados',
+    82: 'Chubascos fuertes',
+    85: 'Chubascos de nieve débiles',
+    86: 'Chubascos de nieve fuertes',
+    95: 'Tormenta',
+    96: 'Tormenta con granizo débil',
+    99: 'Tormenta con granizo fuerte'
+  };
+
+  return map[code] || 'Sin dato';
+}
+
+async function getOpenMeteoForecast(lat, lon, forecastDays = 5) {
+  const latNum = Number(lat);
+  const lonNum = Number(lon);
+  const daysNum = Math.min(Math.max(Number(forecastDays) || 5, 1), 7);
+
+  const cacheKey = `openmeteo:${latNum.toFixed(4)}:${lonNum.toFixed(4)}:${daysNum}`;
+  const cached = getCache(cacheKey);
+  if (cached) return cached;
+
+  const url =
+    'https://api.open-meteo.com/v1/forecast?' +
+    new URLSearchParams({
+      latitude: String(latNum),
+      longitude: String(lonNum),
+      hourly: [
+        'temperature_2m',
+        'precipitation_probability',
+        'precipitation',
+        'rain',
+        'showers',
+        'weather_code',
+        'wind_speed_10m'
+      ].join(','),
+      daily: [
+        'weather_code',
+        'temperature_2m_max',
+        'temperature_2m_min',
+        'precipitation_probability_max',
+        'wind_speed_10m_max'
+      ].join(','),
+      current: [
+        'temperature_2m',
+        'precipitation',
+        'rain',
+        'showers',
+        'weather_code',
+        'wind_speed_10m'
+      ].join(','),
+      timezone: 'auto',
+      forecast_days: String(daysNum)
+    }).toString();
+
+  const data = await fetchJson(url);
+  setCache(cacheKey, data, 15 * 60 * 1000);
+
+  return data;
+}
+
+function pickNearestHourlyForecast(data, targetDate) {
+  const hourly = data?.hourly;
+  if (!hourly?.time?.length) return null;
+
+  const targetTs = targetDate.getTime();
+  let bestIndex = 0;
+  let bestDiff = Infinity;
+
+  for (let i = 0; i < hourly.time.length; i++) {
+    const ts = new Date(hourly.time[i]).getTime();
+    const diff = Math.abs(ts - targetTs);
+    if (diff < bestDiff) {
+      bestDiff = diff;
+      bestIndex = i;
+    }
+  }
+
+  return {
+    time: hourly.time[bestIndex],
+    temperature: hourly.temperature_2m?.[bestIndex] ?? null,
+    precipitationProbability: hourly.precipitation_probability?.[bestIndex] ?? null,
+    precipitation: hourly.precipitation?.[bestIndex] ?? null,
+    rain: hourly.rain?.[bestIndex] ?? null,
+    showers: hourly.showers?.[bestIndex] ?? null,
+    weatherCode: hourly.weather_code?.[bestIndex] ?? null,
+    weatherText: weatherCodeToText(hourly.weather_code?.[bestIndex]),
+    windSpeed: hourly.wind_speed_10m?.[bestIndex] ?? null
+  };
+}
+
+function buildHourlyText(forecast, horaPaso) {
+  if (!forecast) return 'Sin previsión horaria disponible';
+
+  return (
+    'Hora estimada: ' + horaPaso.toLocaleString('es-ES') + '\n' +
+    'Estado del cielo: ' + forecast.weatherText + '\n' +
+    'Temperatura: ' + (forecast.temperature ?? '—') + '°C\n' +
+    'Probabilidad de precipitación: ' + (forecast.precipitationProbability ?? '—') + '%\n' +
+    'Precipitación: ' + (forecast.precipitation ?? '—') + ' mm\n' +
+    'Viento: ' + (forecast.windSpeed ?? '—') + ' km/h'
+  );
+}
+
+function buildArrivalText(forecast, horaLlegada) {
+  if (!forecast) return 'Sin previsión de llegada disponible';
+
+  return (
+    'Hora estimada de llegada: ' + horaLlegada.toLocaleString('es-ES') + '\n' +
+    'Estado del cielo: ' + forecast.weatherText + '\n' +
+    'Temperatura: ' + (forecast.temperature ?? '—') + '°C\n' +
+    'Probabilidad de precipitación: ' + (forecast.precipitationProbability ?? '—') + '%\n' +
+    'Precipitación: ' + (forecast.precipitation ?? '—') + ' mm\n' +
+    'Viento: ' + (forecast.windSpeed ?? '—') + ' km/h'
+  );
+}
+
 app.get('/api/municipio-prediccion', async (req, res) => {
   try {
     if (!AEMET_API_KEY) {
@@ -236,7 +410,8 @@ app.get('/api/municipio-prediccion', async (req, res) => {
     }
 
     const data = await aemetStep(
-      'https://opendata.aemet.es/opendata/api/prediccion/especifica/municipio/diaria/' + municipio.id
+      'https://opendata.aemet.es/opendata/api/prediccion/especifica/municipio/diaria/' + municipio.id,
+      30 * 60 * 1000
     );
 
     const pred = Array.isArray(data) ? data[0] : data;
@@ -254,62 +429,117 @@ app.get('/api/municipio-prediccion', async (req, res) => {
 
 app.get('/api/ruta-meteo', async (req, res) => {
   try {
-    if (!AEMET_API_KEY) {
-      return res.status(500).json({ error: 'Falta AEMET_API_KEY en Render' });
-    }
-
     const puntos = JSON.parse(req.query.puntos || '[]');
+    const fechaSalidaTxt = req.query.fechaSalida || '';
+    const duracionSeg = Number(req.query.duracionSeg || 0);
 
     if (!Array.isArray(puntos) || puntos.length === 0) {
       return res.status(400).json({ error: 'Faltan puntos de ruta' });
     }
 
-    const municipios = await getMunicipios();
+    if (!fechaSalidaTxt) {
+      return res.status(400).json({ error: 'Falta fechaSalida' });
+    }
+
+    const fechaSalida = new Date(fechaSalidaTxt);
+    if (Number.isNaN(fechaSalida.getTime())) {
+      return res.status(400).json({ error: 'fechaSalida inválida' });
+    }
+
+    const lastRouteIndex = Math.max(
+      ...puntos.map(p => Number.isFinite(Number(p.routeIndex)) ? Number(p.routeIndex) : 0),
+      1
+    );
+
     const resultados = [];
 
-    for (const p of puntos) {
-      const nombreBase = (p.nombre || '').split(',')[0];
-      const municipio = escogerMunicipio(nombreBase, municipios);
+    for (let i = 0; i < puntos.length; i++) {
+      const p = puntos[i];
+      const lat = Number(p.lat);
+      const lon = Number(p.lon);
 
-      if (!municipio) {
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
         resultados.push({
-          nombre: p.nombre || 'Punto',
-          error: 'Sin municipio AEMET asociado',
-          avisoColor: 'verde',
-          lat: p.lat,
-          lon: p.lon
+          nombre: p.nombre || `Punto ${i + 1}`,
+          lat,
+          lon,
+          error: 'Coordenadas inválidas'
         });
         continue;
       }
 
-      try {
-        const data = await aemetStep(
-          'https://opendata.aemet.es/opendata/api/prediccion/especifica/municipio/diaria/' + municipio.id
-        );
+      const progress = Number.isFinite(Number(p.routeIndex))
+        ? Number(p.routeIndex) / lastRouteIndex
+        : (puntos.length === 1 ? 1 : i / (puntos.length - 1));
 
-        const pred = Array.isArray(data) ? data[0] : data;
-        const resumen = extraerResumenPrediccion(pred);
+      const horaPaso = new Date(fechaSalida.getTime() + Math.max(0, duracionSeg) * 1000 * progress);
+      const forecast = await getOpenMeteoForecast(lat, lon, 5);
+      const hourlyForecast = pickNearestHourlyForecast(forecast, horaPaso);
 
-        resultados.push({
-          nombre: municipio.nombre,
-          provincia: municipio.provincia,
-          lat: p.lat,
-          lon: p.lon,
-          ...resumen
-        });
-      } catch (e) {
-        resultados.push({
-          nombre: municipio.nombre,
-          provincia: municipio.provincia,
-          lat: p.lat,
-          lon: p.lon,
-          error: e.message,
-          avisoColor: 'verde'
-        });
-      }
+      resultados.push({
+        nombre: p.nombre || `Punto ${i + 1}`,
+        lat,
+        lon,
+        horaPaso: horaPaso.toISOString(),
+        texto: buildHourlyText(hourlyForecast, horaPaso),
+        avisoColor:
+          (hourlyForecast?.precipitationProbability ?? 0) >= 70 ? 'naranja' :
+          (hourlyForecast?.precipitationProbability ?? 0) >= 40 ? 'amarillo' : 'verde',
+        temperatura: hourlyForecast?.temperature ?? null,
+        probLluvia: hourlyForecast?.precipitationProbability ?? null,
+        precipitacion: hourlyForecast?.precipitation ?? null,
+        viento: hourlyForecast?.windSpeed ?? null,
+        estado: hourlyForecast?.weatherText ?? 'Sin dato'
+      });
     }
 
     res.json({ puntos: resultados });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.get('/api/destino-meteo', async (req, res) => {
+  try {
+    const lat = Number(req.query.lat);
+    const lon = Number(req.query.lon);
+    const fechaLlegadaTxt = req.query.fechaLlegada || '';
+    const dias = Math.min(Math.max(Number(req.query.dias || 5), 1), 7);
+
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+      return res.status(400).json({ error: 'Faltan lat/lon válidos para destino' });
+    }
+
+    const fechaLlegada = fechaLlegadaTxt ? new Date(fechaLlegadaTxt) : new Date();
+    if (Number.isNaN(fechaLlegada.getTime())) {
+      return res.status(400).json({ error: 'fechaLlegada inválida' });
+    }
+
+    const forecast = await getOpenMeteoForecast(lat, lon, dias);
+    const llegada = pickNearestHourlyForecast(forecast, fechaLlegada);
+
+    const daily = forecast?.daily || {};
+    const diasDestino = (daily.time || []).map((date, i) => ({
+      fecha: date,
+      estado: weatherCodeToText(daily.weather_code?.[i]),
+      tempMax: daily.temperature_2m_max?.[i] ?? null,
+      tempMin: daily.temperature_2m_min?.[i] ?? null,
+      probLluviaMax: daily.precipitation_probability_max?.[i] ?? null,
+      vientoMax: daily.wind_speed_10m_max?.[i] ?? null
+    }));
+
+    res.json({
+      llegada: {
+        hora: fechaLlegada.toISOString(),
+        texto: buildArrivalText(llegada, fechaLlegada),
+        estado: llegada?.weatherText ?? 'Sin dato',
+        temperatura: llegada?.temperature ?? null,
+        probLluvia: llegada?.precipitationProbability ?? null,
+        precipitacion: llegada?.precipitation ?? null,
+        viento: llegada?.windSpeed ?? null
+      },
+      dias: diasDestino
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -332,7 +562,7 @@ app.get('/api/avisos-oficiales', async (req, res) => {
     const url =
       'https://opendata.aemet.es/opendata/api/avisos_cap/ultimoelaborado/area/' + area;
 
-    const raw = await aemetStep(url);
+    const raw = await aemetStep(url, 5 * 60 * 1000);
     const xml = typeof raw === 'string' ? raw : JSON.stringify(raw);
     const avisos = parseAvisosCapXML(xml);
 
