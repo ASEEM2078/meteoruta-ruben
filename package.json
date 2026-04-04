@@ -1,1 +1,13 @@
-{"name":"meteoruta-ruben","version":"1.0.0","main":"server.js","scripts":{"start":"node server.js"},"dependencies":{"express":"^4.18.2"}}
+{
+  "name": "meteoruta-ruben",
+  "version": "1.0.0",
+  "description": "MeteoRuta con mapa y rutas por carretera",
+  "main": "server.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  }
+}
