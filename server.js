@@ -13,6 +13,10 @@ let municipiosCacheTime = 0;
 
 const memoryCache = new Map();
 
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
 function normalizeText(text) {
   return (text || '')
     .toLowerCase()
@@ -71,20 +75,58 @@ async function fetchJson(url, options = {}) {
   return res.json();
 }
 
+async function fetchWithRetry(url, options = {}, retries = 2, waitMs = 1200) {
+  let lastError = null;
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch(url, options);
+
+      if (res.status === 429) {
+        lastError = new Error(`Error HTTP 429 en ${url}`);
+        if (attempt < retries) {
+          await sleep(waitMs * (attempt + 1));
+          continue;
+        }
+      }
+
+      if (!res.ok) {
+        throw new Error(`Error HTTP ${res.status} en ${url}`);
+      }
+
+      return res;
+    } catch (error) {
+      lastError = error;
+      if (attempt < retries) {
+        await sleep(waitMs * (attempt + 1));
+        continue;
+      }
+    }
+  }
+
+  throw lastError || new Error(`Error de red en ${url}`);
+}
+
 async function aemetStep(url, ttlMs = 10 * 60 * 1000) {
-  const cached = getCache(`aemet:${url}`);
+  const cacheKey = `aemet:${url}`;
+  const cached = getCache(cacheKey);
   if (cached) return cached;
 
-  const res = await fetch(url, {
-    headers: {
-      accept: 'application/json',
-      api_key: AEMET_API_KEY
-    }
-  });
-
-  if (!res.ok) {
-    throw new Error('Error AEMET paso 1: ' + res.status);
+  if (!AEMET_API_KEY) {
+    throw new Error('Falta AEMET_API_KEY en Render');
   }
+
+  const res = await fetchWithRetry(
+    url,
+    {
+      headers: {
+        accept: 'application/json',
+        api_key: AEMET_API_KEY
+      }
+    },
+    2,
+    1500
+  );
 
   const meta = await res.json();
 
@@ -92,28 +134,25 @@ async function aemetStep(url, ttlMs = 10 * 60 * 1000) {
     throw new Error('AEMET no devolvió URL de datos');
   }
 
-  const dataRes = await fetch(meta.datos);
+  await sleep(350);
 
-  if (!dataRes.ok) {
-    throw new Error('Error AEMET paso 2: ' + dataRes.status);
-  }
-
+  const dataRes = await fetchWithRetry(meta.datos, {}, 2, 1500);
   const text = await dataRes.text();
   const parsed = tryParseJSON(text);
 
-  setCache(`aemet:${url}`, parsed, ttlMs);
+  setCache(cacheKey, parsed, ttlMs);
   return parsed;
 }
 
 async function getMunicipios() {
   const now = Date.now();
 
-  if (municipiosCache && now - municipiosCacheTime < 12 * 60 * 60 * 1000) {
+  if (municipiosCache && now - municipiosCacheTime < 24 * 60 * 60 * 1000) {
     return municipiosCache;
   }
 
   const url = 'https://opendata.aemet.es/opendata/api/maestro/municipios';
-  const raw = await aemetStep(url, 12 * 60 * 60 * 1000);
+  const raw = await aemetStep(url, 24 * 60 * 60 * 1000);
   const arr = ensureArray(raw);
 
   if (!arr) {
@@ -331,7 +370,7 @@ async function getOpenMeteoForecast(lat, lon, forecastDays = 5) {
     }).toString();
 
   const data = await fetchJson(url);
-  setCache(cacheKey, data, 15 * 60 * 1000);
+  setCache(cacheKey, data, 20 * 60 * 1000);
 
   return data;
 }
@@ -452,13 +491,20 @@ function buildRiskSummary(nombre, hourlyForecast, horaPaso, risk) {
 
 app.get('/api/municipio-prediccion', async (req, res) => {
   try {
-    if (!AEMET_API_KEY) {
-      return res.status(500).json({ error: 'Falta AEMET_API_KEY en Render' });
-    }
-
     const lugar = req.query.lugar;
     if (!lugar) {
       return res.status(400).json({ error: 'Falta parámetro lugar' });
+    }
+
+    if (!AEMET_API_KEY) {
+      return res.json({
+        municipio: lugar,
+        provincia: '',
+        resumen: {
+          texto: 'Predicción AEMET no disponible ahora mismo.',
+          avisoColor: 'verde'
+        }
+      });
     }
 
     const municipios = await getMunicipios();
@@ -468,19 +514,31 @@ app.get('/api/municipio-prediccion', async (req, res) => {
       return res.status(404).json({ error: 'No se encontró municipio AEMET para ' + lugar });
     }
 
-    const data = await aemetStep(
-      'https://opendata.aemet.es/opendata/api/prediccion/especifica/municipio/diaria/' + municipio.id,
-      30 * 60 * 1000
-    );
+    try {
+      const data = await aemetStep(
+        'https://opendata.aemet.es/opendata/api/prediccion/especifica/municipio/diaria/' + municipio.id,
+        60 * 60 * 1000
+      );
 
-    const pred = Array.isArray(data) ? data[0] : data;
-    const resumen = extraerResumenPrediccion(pred);
+      const pred = Array.isArray(data) ? data[0] : data;
+      const resumen = extraerResumenPrediccion(pred);
 
-    res.json({
-      municipio: municipio.nombre,
-      provincia: municipio.provincia,
-      resumen
-    });
+      return res.json({
+        municipio: municipio.nombre,
+        provincia: municipio.provincia,
+        resumen
+      });
+    } catch (error) {
+      return res.json({
+        municipio: municipio.nombre,
+        provincia: municipio.provincia,
+        resumen: {
+          texto: 'Predicción AEMET temporalmente no disponible. Intenta de nuevo en unos minutos.',
+          avisoColor: 'verde'
+        },
+        aemetTemporalmenteNoDisponible: true
+      });
+    }
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -607,7 +665,14 @@ app.get('/api/destino-meteo', async (req, res) => {
 app.get('/api/avisos-oficiales', async (req, res) => {
   try {
     if (!AEMET_API_KEY) {
-      return res.status(500).json({ error: 'Falta AEMET_API_KEY en Render' });
+      return res.json({
+        ok: true,
+        totalAvisos: 0,
+        activos: 0,
+        relacionados: 0,
+        avisos: [],
+        aemetTemporalmenteNoDisponible: true
+      });
     }
 
     const area = req.query.area || 'esp';
@@ -621,7 +686,20 @@ app.get('/api/avisos-oficiales', async (req, res) => {
     const url =
       'https://opendata.aemet.es/opendata/api/avisos_cap/ultimoelaborado/area/' + area;
 
-    const raw = await aemetStep(url, 5 * 60 * 1000);
+    let raw;
+    try {
+      raw = await aemetStep(url, 15 * 60 * 1000);
+    } catch (error) {
+      return res.json({
+        ok: true,
+        totalAvisos: 0,
+        activos: 0,
+        relacionados: 0,
+        avisos: [],
+        aemetTemporalmenteNoDisponible: true
+      });
+    }
+
     const xml = typeof raw === 'string' ? raw : JSON.stringify(raw);
     const avisos = parseAvisosCapXML(xml);
 
