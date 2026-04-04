@@ -642,10 +642,10 @@
         const div = L.DomUtil.create('div', 'legend-control');
         div.innerHTML = `
           <div class="legend-title">Leyenda</div>
-          <div class="legend-row"><span class="legend-color" style="background:#16a34a;"></span><span>Ruta normal</span></div>
-          <div class="legend-row"><span class="legend-color" style="background:#eab308;"></span><span>Aviso amarillo / Riesgo moderado</span></div>
-          <div class="legend-row"><span class="legend-color" style="background:#f97316;"></span><span>Aviso naranja / Riesgo alto</span></div>
-          <div class="legend-row"><span class="legend-color" style="background:#dc2626;"></span><span>Aviso rojo / Riesgo muy alto</span></div>
+          <div class="legend-row"><span class="legend-color" style="background:#16a34a;"></span><span>Ruta base</span></div>
+          <div class="legend-row"><span class="legend-color" style="background:#eab308;"></span><span>Riesgo moderado</span></div>
+          <div class="legend-row"><span class="legend-color" style="background:#f97316;"></span><span>Riesgo alto</span></div>
+          <div class="legend-row"><span class="legend-color" style="background:#dc2626;"></span><span>Riesgo muy alto</span></div>
           <div class="legend-row"><span class="legend-color" style="background:#2563eb;"></span><span>Lluvia detectada</span></div>
         `;
         return div;
@@ -1900,8 +1900,8 @@
         rutaLayer = L.geoJSON(ruta, {
           style: {
             color: '#16a34a',
-            weight: 5,
-            opacity: 0.75
+            weight: 2,
+            opacity: 0.15
           }
         }).addTo(map);
 
