@@ -500,6 +500,7 @@
         <div class="pro-actions">
           <button onclick="analizarRiesgoRutaPro()">Analizar riesgo de ruta</button>
           <button class="btn-secondary" onclick="calcularMejorSalidaPro()">Mejor hora de salida</button>
+          <button class="btn-warning" onclick="generarPDFPro()">📄 Descargar PDF PRO</button>
         </div>
         <div id="meteorutaProResultado" class="pro-result" style="margin-top:10px;">Todavía no calculado.</div>
       </div>
@@ -599,6 +600,7 @@
   </div>
 
   <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script>
     const map = L.map('map').setView([40.4168, -3.7038], 6);
 
@@ -661,6 +663,181 @@
         .replace(/[^\w\s-]/g, ' ')
         .replace(/\s+/g, ' ')
         .trim();
+    }
+
+    function htmlToPlainText(html) {
+      const div = document.createElement('div');
+      div.innerHTML = html || '';
+      return (div.textContent || div.innerText || '').replace(/\s+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+    }
+
+    function safeText(id, fallback = 'No disponible') {
+      const el = document.getElementById(id);
+      if (!el) return fallback;
+      const text = htmlToPlainText(el.innerHTML || el.textContent || '');
+      return text || fallback;
+    }
+
+    function addPdfBlock(doc, title, text, y, pageHeight = 285) {
+      if (y > 250) {
+        doc.addPage();
+        y = 20;
+      }
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(13);
+      doc.text(title, 15, y);
+      y += 8;
+
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(10);
+
+      const lines = doc.splitTextToSize(text || 'No disponible', 180);
+      doc.text(lines, 15, y);
+      y += lines.length * 5 + 8;
+
+      if (y > pageHeight) {
+        doc.addPage();
+        y = 20;
+      }
+
+      return y;
+    }
+
+    function generarPDFPro() {
+      try {
+        if (!currentOrigenTxt || !currentDestinoTxt) {
+          alert('Primero calcula una ruta antes de generar el PDF.');
+          return;
+        }
+
+        const { jsPDF } = window.jspdf;
+        const doc = new jsPDF();
+
+        const fechaGeneracion = new Date().toLocaleString('es-ES');
+        const salida = currentFechaSalida ? currentFechaSalida.toLocaleString('es-ES') : 'No disponible';
+        const llegada = currentFechaSalida && currentRouteDurationSec
+          ? new Date(currentFechaSalida.getTime() + currentRouteDurationSec * 1000).toLocaleString('es-ES')
+          : 'No disponible';
+
+        const resumen = safeText('resumen');
+        const estadoRuta = safeText('estadoRuta');
+        const meteoRuta = safeText('meteoRuta');
+        const meteoTrayecto = safeText('meteoTrayecto');
+        const meteoLlegada = safeText('meteoLlegada');
+        const meteoDestinoDias = safeText('meteoDestinoDias');
+        const nivelAviso = safeText('nivelAviso');
+        const provinciasRuta = safeText('provinciasRuta');
+        const avisosOficiales = safeText('avisosOficiales');
+        const lluviaRutaEstado = safeText('lluviaRutaEstado');
+        const tramosConflictivosTxt = safeText('tramosConflictivos');
+        const tramosRiesgoProTxt = safeText('tramosRiesgoPro');
+        const meteorutaProResultado = safeText('meteorutaProResultado');
+        const alertasPro = safeText('alertasPro');
+        const rutaInteligenteResultado = safeText('rutaInteligenteResultado');
+
+        const consejos = [
+          'Consultar radar, avisos oficiales y previsión antes de iniciar el trayecto.',
+          'Valorar retrasar la salida si existen avisos naranja o rojo, tormenta prevista o lluvia intensa.',
+          'Extremar la precaución en tramos señalados como conflictivos o de riesgo alto.',
+          'Aumentar la distancia de seguridad y moderar la velocidad con lluvia, viento o baja visibilidad.',
+          'No atravesar zonas inundables, balsas de agua o viales anegados.',
+          'Mantener el móvil cargado y compartir itinerario y hora estimada de llegada.',
+          'Revisar combustible, neumáticos, limpiaparabrisas y luces antes de la salida.',
+          'En caso de empeoramiento rápido, detener el viaje en un lugar seguro y reevaluar.'
+        ];
+
+        let y = 18;
+
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(18);
+        doc.text('INFORME METEORUTA PRO', 15, y);
+
+        y += 8;
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(10);
+        doc.text('Generado automáticamente por MeteoRuta Pro', 15, y);
+
+        y += 8;
+        doc.text(`Fecha de generación: ${fechaGeneracion}`, 15, y);
+
+        y += 12;
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(13);
+        doc.text('1. Datos generales de la ruta', 15, y);
+
+        y += 8;
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(10);
+        doc.text(doc.splitTextToSize(`Origen: ${currentOrigenTxt}`, 180), 15, y);
+        y += 6;
+        doc.text(doc.splitTextToSize(`Destino: ${currentDestinoTxt}`, 180), 15, y);
+        y += 6;
+        doc.text(`Hora de salida: ${salida}`, 15, y);
+        y += 6;
+        doc.text(`Hora estimada de llegada: ${llegada}`, 15, y);
+
+        y += 10;
+        y = addPdfBlock(doc, '2. Resumen de ruta', resumen, y);
+        y = addPdfBlock(doc, '3. Estado de la ruta', estadoRuta, y);
+        y = addPdfBlock(doc, '4. Evaluación MeteoRuta Pro', meteorutaProResultado, y);
+        y = addPdfBlock(doc, '5. Ruta inteligente', rutaInteligenteResultado, y);
+        y = addPdfBlock(doc, '6. Alertas Pro', alertasPro, y);
+        y = addPdfBlock(doc, '7. Tramos conflictivos', tramosConflictivosTxt, y);
+        y = addPdfBlock(doc, '8. Tramos de riesgo MeteoRuta Pro', tramosRiesgoProTxt, y);
+        y = addPdfBlock(doc, '9. Previsión meteorológica de la ruta', meteoRuta, y);
+        y = addPdfBlock(doc, '10. Meteo durante el trayecto', meteoTrayecto, y);
+        y = addPdfBlock(doc, '11. Llegada al destino', meteoLlegada, y);
+        y = addPdfBlock(doc, '12. Próximos días en destino', meteoDestinoDias, y);
+        y = addPdfBlock(doc, '13. Nivel oficial en la ruta', nivelAviso, y);
+        y = addPdfBlock(doc, '14. Provincias detectadas', provinciasRuta, y);
+        y = addPdfBlock(doc, '15. Avisos oficiales', avisosOficiales, y);
+        y = addPdfBlock(doc, '16. Lluvia sobre la ruta', lluviaRutaEstado, y);
+
+        if (y > 230) {
+          doc.addPage();
+          y = 20;
+        }
+
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(13);
+        doc.text('17. Consejos preventivos', 15, y);
+        y += 8;
+
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(10);
+
+        consejos.forEach((consejo, index) => {
+          const line = `${index + 1}. ${consejo}`;
+          const lines = doc.splitTextToSize(line, 180);
+
+          if (y > 270) {
+            doc.addPage();
+            y = 20;
+          }
+
+          doc.text(lines, 15, y);
+          y += lines.length * 5 + 3;
+        });
+
+        if (y > 255) {
+          doc.addPage();
+          y = 20;
+        }
+
+        const nombreArchivo = `MeteoRuta_PRO_${currentOrigenTxt}_${currentDestinoTxt}`
+          .replace(/[^\w\-]+/g, '_')
+          .replace(/_+/g, '_')
+          .substring(0, 80) + '.pdf';
+
+        doc.setFontSize(9);
+        doc.text('MeteoRuta Pro · Rubén López de Quero', 15, 285);
+
+        doc.save(nombreArchivo);
+      } catch (error) {
+        console.error(error);
+        alert('No se pudo generar el PDF PRO.');
+      }
     }
 
     function colorAviso(nivel) {
