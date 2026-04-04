@@ -1,79 +1,102 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>MeteoRuta - Rutas</title>
+<meta charset="UTF-8">
+<title>MeteoRuta Pro</title>
 
-  <link
-    rel="stylesheet"
-    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
-    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
-    crossorigin=""
-  />
+<link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
 
-  <link rel="stylesheet" href="style.css" />
+<style>
+body {
+  margin: 0;
+  font-family: Arial;
+  background: #f5f7fb;
+}
+
+.topbar {
+  background: #0f172a;
+  color: white;
+  padding: 15px;
+  text-align: center;
+}
+
+#map {
+  height: 70vh;
+}
+
+.panel {
+  padding: 15px;
+}
+
+select, button {
+  padding: 10px;
+  margin: 5px;
+}
+
+.result {
+  background: white;
+  padding: 10px;
+  margin-top: 10px;
+  border-radius: 10px;
+}
+</style>
 </head>
+
 <body>
-  <header class="topbar">
-    <div class="topbar-left">
-      <h1>MeteoRuta</h1>
-      <p class="subtitle">Rutas por carretera con mapa interactivo</p>
-    </div>
 
-    <div class="topbar-right">
-      <button id="btnClear" class="btn btn-secondary">Limpiar ruta</button>
-      <button id="btnMyLocation" class="btn btn-primary">Mi ubicación</button>
-    </div>
-  </header>
+<div class="topbar">
+  <h2>MeteoRuta Pro 🌦️</h2>
+</div>
 
-  <main class="layout">
-    <aside class="sidebar">
-      <section class="panel">
-        <h2>Cómo usar</h2>
-        <p>1. Haz clic en el mapa para marcar el <strong>origen</strong>.</p>
-        <p>2. Haz un segundo clic para marcar el <strong>destino</strong>.</p>
-        <p>3. La ruta se calculará automáticamente.</p>
-      </section>
+<div id="map"></div>
 
-      <section class="panel">
-        <h2>Puntos seleccionados</h2>
+<div class="panel">
+  <select id="municipios"></select>
+  <button onclick="cargarMeteo()">Consultar tiempo</button>
 
-        <div class="field-group">
-          <label>Origen</label>
-          <div id="startCoords" class="field-value">No seleccionado</div>
-        </div>
+  <div id="resultado" class="result"></div>
+</div>
 
-        <div class="field-group">
-          <label>Destino</label>
-          <div id="endCoords" class="field-value">No seleccionado</div>
-        </div>
-      </section>
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 
-      <section class="panel">
-        <h2>Información de ruta</h2>
-        <div id="routeInfo" class="route-info empty">
-          Selecciona origen y destino para calcular la ruta.
-        </div>
-      </section>
+<script>
+let map = L.map('map').setView([40.4168, -3.7038], 6);
 
-      <section class="panel">
-        <h2>Estado</h2>
-        <div id="statusBox" class="status-box">Esperando selección en el mapa.</div>
-      </section>
-    </aside>
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
 
-    <section class="map-section">
-      <div id="map"></div>
-    </section>
-  </main>
+let municipiosData = [];
 
-  <script
-    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
-    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
-    crossorigin=""
-  ></script>
+async function cargarMunicipios() {
+  const res = await fetch('/api/municipios');
+  municipiosData = await res.json();
 
-  <script src="app.js"></script>
+  const select = document.getElementById('municipios');
+
+  municipiosData.forEach(m => {
+    let option = document.createElement('option');
+    option.value = m.id;
+    option.text = m.nombre;
+    select.appendChild(option);
+  });
+}
+
+async function cargarMeteo() {
+  const id = document.getElementById('municipios').value;
+
+  const res = await fetch(`/api/prediccion/${id}`);
+  const data = await res.json();
+
+  const pred = data[0].prediccion.dia[0];
+
+  document.getElementById('resultado').innerHTML = `
+    <b>Estado:</b> ${pred.estadoCielo[0].descripcion}<br>
+    <b>Temperatura:</b> ${pred.temperatura[0].value}°C<br>
+    <b>Viento:</b> ${pred.viento[0].velocidad} km/h
+  `;
+}
+
+cargarMunicipios();
+</script>
+
 </body>
 </html>
