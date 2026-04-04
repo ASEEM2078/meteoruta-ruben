@@ -323,6 +323,37 @@
       margin-top: 8px;
     }
 
+    .alerta-pro {
+      border: 1px solid #e5e7eb;
+      border-left: 6px solid #16a34a;
+      border-radius: 8px;
+      background: #fafafa;
+      padding: 10px;
+      margin-bottom: 10px;
+      white-space: normal;
+      line-height: 1.4;
+    }
+
+    .alerta-pro.alta {
+      border-left-color: #dc2626;
+      background: #fef2f2;
+    }
+
+    .alerta-pro.media {
+      border-left-color: #f97316;
+      background: #fff7ed;
+    }
+
+    .alerta-pro.baja {
+      border-left-color: #16a34a;
+      background: #f0fdf4;
+    }
+
+    .alerta-pro-titulo {
+      font-weight: bold;
+      margin-bottom: 4px;
+    }
+
     @media (max-width: 900px) {
       .layout { flex-direction: column; }
       .sidebar { width: 100%; min-width: 100%; }
@@ -395,6 +426,11 @@
           <button class="btn-secondary" onclick="calcularMejorSalidaPro()">Mejor hora de salida</button>
         </div>
         <div id="meteorutaProResultado" class="pro-result" style="margin-top:10px;">Todavía no calculado.</div>
+      </div>
+
+      <div class="panel">
+        <h3>Alertas Pro</h3>
+        <div id="alertasPro" class="small">Todavía no calculadas.</div>
       </div>
 
       <div class="panel">
@@ -516,6 +552,8 @@
     let currentRoutePoints = [];
     let currentOrigenTxt = '';
     let currentDestinoTxt = '';
+    let lastRiskAnalysis = null;
+    let lastBestDeparture = null;
 
     function ponerHoraSalidaPorDefecto() {
       const input = document.getElementById('horaSalida');
@@ -605,9 +643,9 @@
         div.innerHTML = `
           <div class="legend-title">Leyenda</div>
           <div class="legend-row"><span class="legend-color" style="background:#16a34a;"></span><span>Ruta normal</span></div>
-          <div class="legend-row"><span class="legend-color" style="background:#eab308;"></span><span>Aviso amarillo</span></div>
-          <div class="legend-row"><span class="legend-color" style="background:#f97316;"></span><span>Aviso naranja</span></div>
-          <div class="legend-row"><span class="legend-color" style="background:#dc2626;"></span><span>Aviso rojo</span></div>
+          <div class="legend-row"><span class="legend-color" style="background:#eab308;"></span><span>Aviso amarillo / Riesgo moderado</span></div>
+          <div class="legend-row"><span class="legend-color" style="background:#f97316;"></span><span>Aviso naranja / Riesgo alto</span></div>
+          <div class="legend-row"><span class="legend-color" style="background:#dc2626;"></span><span>Aviso rojo / Riesgo muy alto</span></div>
           <div class="legend-row"><span class="legend-color" style="background:#2563eb;"></span><span>Lluvia detectada</span></div>
         `;
         return div;
@@ -632,6 +670,13 @@
         day: '2-digit',
         month: '2-digit'
       });
+    }
+
+    function formatHourOnly(value) {
+      if (!value) return 'No disponible';
+      const d = new Date(value);
+      if (isNaN(d.getTime())) return 'No disponible';
+      return d.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
     }
 
     async function sugerir(inputId, listId) {
@@ -770,8 +815,12 @@
         riesgoProRouteLayer = null;
       }
 
+      lastRiskAnalysis = null;
+      lastBestDeparture = null;
+
       document.getElementById('tramosRiesgoPro').innerHTML = 'Todavía no calculados.';
       document.getElementById('meteorutaProResultado').innerHTML = 'Todavía no calculado.';
+      document.getElementById('alertasPro').innerHTML = 'Todavía no calculadas.';
     }
 
     function avisoAplicaAPunto(aviso, punto) {
@@ -1073,6 +1122,115 @@
       }
 
       riesgoProRouteLayer.addTo(map);
+    }
+
+    function generarAlertasPro(analysis, bestDeparture = null) {
+      const alertas = [];
+      const puntos = Array.isArray(analysis?.puntos) ? analysis.puntos : [];
+      const riesgoGlobal = Number(analysis?.riesgoGlobal ?? 0);
+
+      if (riesgoGlobal >= 70) {
+        alertas.push({
+          nivel: 'alta',
+          titulo: 'No recomendable salir ahora',
+          texto: `La ruta presenta un riesgo global de ${riesgoGlobal}/100. Conviene retrasar la salida o revisar una alternativa.`
+        });
+      } else if (riesgoGlobal >= 40) {
+        alertas.push({
+          nivel: 'media',
+          titulo: 'Precaución en ruta',
+          texto: `La ruta presenta un riesgo global de ${riesgoGlobal}/100. Conviene circular con margen y vigilar los tramos señalados.`
+        });
+      } else {
+        alertas.push({
+          nivel: 'baja',
+          titulo: 'Condiciones razonables para viajar',
+          texto: `La ruta presenta un riesgo global de ${riesgoGlobal}/100. Aun así, revisa radar y avisos antes de salir.`
+        });
+      }
+
+      const peor = analysis?.peorTramo;
+      if (peor && Number(peor.riesgo ?? 0) >= 60) {
+        alertas.push({
+          nivel: 'alta',
+          titulo: 'Tramo especialmente comprometido',
+          texto: `${peor.nombre || 'Un punto de la ruta'} concentra el peor riesgo (${peor.riesgo}/100) alrededor de las ${formatHourOnly(peor.horaPaso)}.`
+        });
+      }
+
+      puntos.forEach(p => {
+        const estado = normalizeText(p.estado || '');
+        const prob = Number(p.probLluvia ?? 0);
+        const precip = Number(p.precipitacion ?? 0);
+        const viento = Number(p.viento ?? 0);
+
+        if (estado.includes('tormenta')) {
+          alertas.push({
+            nivel: 'alta',
+            titulo: 'Tormenta prevista en ruta',
+            texto: `${p.nombre || 'Un punto de la ruta'} puede verse afectado por tormenta hacia las ${formatHourOnly(p.horaPaso)}.`
+          });
+        }
+
+        if (precip >= 4) {
+          alertas.push({
+            nivel: 'alta',
+            titulo: 'Lluvia intensa',
+            texto: `${p.nombre || 'Un punto de la ruta'} presenta precipitación estimada de ${precip} mm hacia las ${formatHourOnly(p.horaPaso)}. Riesgo de visibilidad reducida y aquaplaning.`
+          });
+        } else if (prob >= 80) {
+          alertas.push({
+            nivel: 'media',
+            titulo: 'Alta probabilidad de lluvia',
+            texto: `${p.nombre || 'Un punto de la ruta'} tiene una probabilidad de precipitación del ${prob}% hacia las ${formatHourOnly(p.horaPaso)}.`
+          });
+        }
+
+        if (viento >= 50) {
+          alertas.push({
+            nivel: 'media',
+            titulo: 'Viento fuerte',
+            texto: `${p.nombre || 'Un punto de la ruta'} puede registrar viento de ${viento} km/h. Atención en adelantamientos y zonas expuestas.`
+          });
+        }
+      });
+
+      if (bestDeparture?.mejor && analysis?.salida) {
+        const actualRisk = Number(analysis.riesgoGlobal ?? 0);
+        const bestRisk = Number(bestDeparture.mejor.riesgoGlobal ?? 0);
+
+        if (bestRisk + 10 < actualRisk) {
+          alertas.push({
+            nivel: 'media',
+            titulo: 'Conviene cambiar la hora de salida',
+            texto: `Salir a las ${formatHourOnly(bestDeparture.mejor.salida)} reduce el riesgo de ${actualRisk}/100 a ${bestRisk}/100.`
+          });
+        }
+      }
+
+      const dedup = new Map();
+      alertas.forEach(a => {
+        const key = `${a.nivel}|${a.titulo}|${a.texto}`;
+        if (!dedup.has(key)) dedup.set(key, a);
+      });
+
+      return Array.from(dedup.values()).slice(0, 8);
+    }
+
+    function pintarAlertasPro(alertas) {
+      const cont = document.getElementById('alertasPro');
+
+      if (!Array.isArray(alertas) || !alertas.length) {
+        cont.innerHTML = 'No se han generado alertas adicionales.';
+        return;
+      }
+
+      cont.innerHTML = alertas.map(a => `
+        <div class="alerta-pro ${a.nivel}">
+          <div class="alerta-pro-titulo">${a.titulo}</div>
+          <div>${a.texto}</div>
+        </div>
+      `).join('');
     }
 
     function zoomATramo(index) {
@@ -1433,12 +1591,33 @@
       }
 
       const peor = data.peorTramo;
+      let recomendacion = '';
+      let color = '';
+
+      if ((data.riesgoGlobal ?? 0) >= 70) {
+        recomendacion = '🚫 No recomendable salir';
+        color = '#dc2626';
+      } else if ((data.riesgoGlobal ?? 0) >= 40) {
+        recomendacion = '⚠️ Precaución en ruta';
+        color = '#f97316';
+      } else {
+        recomendacion = '✅ Buen momento para viajar';
+        color = '#16a34a';
+      }
+
       return `
         <div class="pro-card">
           <div class="pro-title">Resumen de riesgo</div>
+
+          <div class="pro-line">
+            <strong>Recomendación:</strong>
+            <span style="color:${color}; font-weight:bold;">${recomendacion}</span>
+          </div>
+
           <div class="pro-line"><strong>Riesgo global:</strong> ${data.riesgoGlobal ?? 0}/100</div>
           <div class="pro-line"><strong>Nivel global:</strong> ${data.nivelGlobal || 'No disponible'}</div>
           <div class="pro-line"><strong>Resumen:</strong> ${data.resumen || 'Sin resumen'}</div>
+
           ${peor ? `
             <div class="pro-list-item">
               <div><strong>Peor tramo:</strong> ${peor.nombre || 'Ruta'}</div>
@@ -1487,6 +1666,7 @@
 
         document.getElementById('meteorutaProResultado').innerHTML = 'Analizando riesgo de ruta...';
         document.getElementById('tramosRiesgoPro').innerHTML = 'Calculando tramos de riesgo...';
+        document.getElementById('alertasPro').innerHTML = 'Calculando alertas pro...';
 
         const res = await fetch('/api/route/analyze', {
           method: 'POST',
@@ -1506,15 +1686,19 @@
           throw new Error(data.error);
         }
 
+        lastRiskAnalysis = data;
+
         document.getElementById('meteorutaProResultado').innerHTML = construirHtmlResultadoPro(data);
         pintarPanelRiesgoPro(data.puntos || []);
         pintarPinsRiesgoPro(data.puntos || []);
         pintarRutaRiesgoPro(data.puntos || []);
+        pintarAlertasPro(generarAlertasPro(data, lastBestDeparture));
 
       } catch (error) {
         console.error(error);
         document.getElementById('meteorutaProResultado').innerHTML = 'No se pudo analizar el riesgo de la ruta.';
         document.getElementById('tramosRiesgoPro').innerHTML = 'No se pudieron calcular los tramos de riesgo.';
+        document.getElementById('alertasPro').innerHTML = 'No se pudieron calcular las alertas pro.';
       }
     }
 
@@ -1547,7 +1731,12 @@
           throw new Error(data.error);
         }
 
+        lastBestDeparture = data;
         document.getElementById('meteorutaProResultado').innerHTML = construirHtmlMejorSalida(data);
+
+        if (lastRiskAnalysis) {
+          pintarAlertasPro(generarAlertasPro(lastRiskAnalysis, data));
+        }
 
       } catch (error) {
         console.error(error);
@@ -1628,6 +1817,7 @@
         document.getElementById("tramosConflictivos").textContent = "Calculando tramos conflictivos...";
         document.getElementById("tramosRiesgoPro").textContent = "Todavía no calculados.";
         document.getElementById("meteorutaProResultado").innerHTML = "Todavía no calculado.";
+        document.getElementById("alertasPro").innerHTML = "Todavía no calculadas.";
 
         const origen = await geocode(origenTxt);
         const destino = await geocode(destinoTxt);
@@ -1663,7 +1853,7 @@
         currentRouteCoords = coords;
         currentRouteDurationSec = route.duration;
 
-        const maxPuntosMeteo = 5;
+        const maxPuntosMeteo = coords.length > 300 ? 3 : 5;
         const paso = Math.max(1, Math.floor(coords.length / maxPuntosMeteo));
 
         const puntos = [];
@@ -1766,6 +1956,7 @@
         document.getElementById("tramosConflictivos").textContent = "No se pudieron calcular.";
         document.getElementById("tramosRiesgoPro").textContent = "No se pudieron calcular.";
         document.getElementById("meteorutaProResultado").innerHTML = "No se pudo calcular MeteoRuta Pro.";
+        document.getElementById("alertasPro").innerHTML = "No se pudieron calcular las alertas pro.";
       }
     }
 
