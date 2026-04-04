@@ -510,6 +510,7 @@
     let tramosConflictivos = [];
 
     let riesgoProPinsLayer = null;
+    let riesgoProRouteLayer = null;
 
     let legendControl = null;
     let currentRoutePoints = [];
@@ -763,6 +764,12 @@
         map.removeLayer(riesgoProPinsLayer);
         riesgoProPinsLayer = null;
       }
+
+      if (riesgoProRouteLayer) {
+        map.removeLayer(riesgoProRouteLayer);
+        riesgoProRouteLayer = null;
+      }
+
       document.getElementById('tramosRiesgoPro').innerHTML = 'Todavía no calculados.';
       document.getElementById('meteorutaProResultado').innerHTML = 'Todavía no calculado.';
     }
@@ -1015,6 +1022,57 @@
       });
 
       riesgoProPinsLayer.addTo(map);
+    }
+
+    function pintarRutaRiesgoPro(puntos) {
+      if (riesgoProRouteLayer) {
+        map.removeLayer(riesgoProRouteLayer);
+        riesgoProRouteLayer = null;
+      }
+
+      if (!Array.isArray(puntos) || puntos.length < 2) {
+        return;
+      }
+
+      riesgoProRouteLayer = L.layerGroup();
+
+      for (let i = 0; i < puntos.length - 1; i++) {
+        const actual = puntos[i];
+        const siguiente = puntos[i + 1];
+
+        if (
+          typeof actual.lat !== 'number' ||
+          typeof actual.lon !== 'number' ||
+          typeof siguiente.lat !== 'number' ||
+          typeof siguiente.lon !== 'number'
+        ) {
+          continue;
+        }
+
+        const color = colorRiesgoHex(actual.colorRiesgo || 'verde');
+
+        L.polyline(
+          [
+            [actual.lat, actual.lon],
+            [siguiente.lat, siguiente.lon]
+          ],
+          {
+            color,
+            weight: 7,
+            opacity: 0.9
+          }
+        ).bindPopup(`
+          <strong>Tramo ${i + 1}</strong><br>
+          ${pillRiesgo(actual.nivelRiesgo || 'bajo')}<br>
+          <strong>Desde:</strong> ${actual.nombre || 'Punto de ruta'}<br>
+          <strong>Hora:</strong> ${formatDateTimeEs(actual.horaPaso)}<br>
+          <strong>Estado:</strong> ${actual.estado || 'Sin dato'}<br>
+          <strong>Prob. lluvia:</strong> ${actual.probLluvia ?? '—'}%<br>
+          <strong>Riesgo:</strong> ${actual.riesgo ?? 0}/100
+        `).addTo(riesgoProRouteLayer);
+      }
+
+      riesgoProRouteLayer.addTo(map);
     }
 
     function zoomATramo(index) {
@@ -1451,6 +1509,7 @@
         document.getElementById('meteorutaProResultado').innerHTML = construirHtmlResultadoPro(data);
         pintarPanelRiesgoPro(data.puntos || []);
         pintarPinsRiesgoPro(data.puntos || []);
+        pintarRutaRiesgoPro(data.puntos || []);
 
       } catch (error) {
         console.error(error);
