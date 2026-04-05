@@ -500,13 +500,13 @@
         <div class="pro-actions">
           <button onclick="analizarRiesgoRutaPro()">Analizar riesgo de ruta</button>
           <button class="btn-secondary" onclick="calcularMejorSalidaPro()">Mejor hora de salida</button>
-          <button class="btn-warning" onclick="generarPDFPro()">📄 Descargar PDF PRO</button>
+          <button class="btn-warning" onclick="generarPDFPro()">Descargar PDF PRO</button>
         </div>
         <div id="meteorutaProResultado" class="pro-result" style="margin-top:10px;">Todavía no calculado.</div>
       </div>
 
       <div class="panel-highlight-green">
-        <h3>🚦 Ruta Inteligente</h3>
+        <h3>Ruta Inteligente</h3>
         <div class="pro-actions">
           <button onclick="calcularRutaInteligente()">Analizar ruta inteligente</button>
         </div>
@@ -514,12 +514,12 @@
       </div>
 
       <details class="panel-accordion" open>
-        <summary>⚠️ Alertas Pro</summary>
+        <summary>Alertas Pro</summary>
         <div id="alertasPro" class="small">Todavía no calculadas.</div>
       </details>
 
       <details class="panel-accordion">
-        <summary>🌧️ Radar de lluvia</summary>
+        <summary>Radar de lluvia</summary>
         <button class="btn-secondary" onclick="toggleRadar()">Activar / desactivar radar</button>
         <div class="radar-controls">
           <button onclick="cargarRadar()">Actualizar radar</button>
@@ -530,22 +530,22 @@
       </details>
 
       <details class="panel-accordion" open>
-        <summary>🛣️ Meteo durante el trayecto</summary>
+        <summary>Meteo durante el trayecto</summary>
         <div id="meteoTrayecto" class="small">Todavía no calculada.</div>
       </details>
 
       <details class="panel-accordion">
-        <summary>📍 Llegada al destino</summary>
+        <summary>Llegada al destino</summary>
         <div id="meteoLlegada" class="small">Todavía no calculada.</div>
       </details>
 
       <details class="panel-accordion">
-        <summary>📅 Próximos días en destino</summary>
+        <summary>Próximos días en destino</summary>
         <div id="meteoDestinoDias" class="small">Todavía no calculada.</div>
       </details>
 
       <details class="panel-accordion">
-        <summary>🌦️ Lluvia sobre la ruta</summary>
+        <summary>Lluvia sobre la ruta</summary>
         <button onclick="analizarLluviaRuta()">Comprobar lluvia en ruta</button>
         <div class="radar-controls">
           <button class="btn-danger" onclick="limpiarAnalisisLluvia()">Limpiar análisis</button>
@@ -554,44 +554,44 @@
       </details>
 
       <details class="panel-accordion">
-        <summary>🚧 Tramos conflictivos</summary>
+        <summary>Tramos conflictivos</summary>
         <div id="tramosConflictivos" class="small">Todavía no calculados.</div>
       </details>
 
       <details class="panel-accordion" open>
-        <summary>📊 Tramos de riesgo MeteoRuta Pro</summary>
+        <summary>Tramos de riesgo MeteoRuta Pro</summary>
         <div id="tramosRiesgoPro" class="small">Todavía no calculados.</div>
       </details>
 
       <details class="panel-accordion">
-        <summary>🚗 Tráfico en tiempo real</summary>
+        <summary>Tráfico en tiempo real</summary>
         <a class="btn-link" href="https://etraffic.dgt.es/etrafficWEB/" target="_blank" rel="noopener noreferrer">
           <button class="btn-secondary" type="button">Ver estado del tráfico (DGT)</button>
         </a>
       </details>
 
       <details class="panel-accordion" open>
-        <summary>📝 Resumen</summary>
+        <summary>Resumen</summary>
         <div id="resumen">Calcula una ruta...</div>
       </details>
 
       <details class="panel-accordion">
-        <summary>🌤️ Previsión meteorológica de la ruta</summary>
+        <summary>Previsión meteorológica de la ruta</summary>
         <div id="meteoRuta">Todavía no calculada.</div>
       </details>
 
       <details class="panel-accordion">
-        <summary>🚨 Nivel oficial en la ruta</summary>
+        <summary>Nivel oficial en la ruta</summary>
         <div id="nivelAviso"><span class="badge verde">Sin calcular</span></div>
       </details>
 
       <details class="panel-accordion">
-        <summary>🗺️ Provincias detectadas en la ruta</summary>
+        <summary>Provincias detectadas en la ruta</summary>
         <div id="provinciasRuta" class="small">Sin calcular.</div>
       </details>
 
       <details class="panel-accordion">
-        <summary>📢 Avisos oficiales</summary>
+        <summary>Avisos oficiales</summary>
         <div id="avisosOficiales" class="small">Todavía no consultados.</div>
       </details>
     </div>
@@ -643,6 +643,34 @@
     let lastBestDeparture = null;
     let lastSmartRoute = null;
 
+    const PROVINCE_ALIASES = {
+      alicante: ['alicante', 'alacant', 'alicantino', 'alicantina'],
+      castellon: ['castellon', 'castello', 'castellonense'],
+      valencia: ['valencia', 'valenciano', 'valenciana'],
+      murcia: ['murcia', 'murciano', 'murciana'],
+      albacete: ['albacete', 'albaceteno', 'albacetena', 'albaceteño', 'albaceteña'],
+      cuenca: ['cuenca', 'conquense'],
+      madrid: ['madrid', 'madrileno', 'madrilena', 'madrileño', 'madrileña'],
+      toledo: ['toledo', 'toledano', 'toledana'],
+      almeria: ['almeria', 'almeriense'],
+      granada: ['granada', 'granadino', 'granadina'],
+      barcelona: ['barcelona', 'barcelones', 'barcelonesa', 'barcelonés'],
+      tarragona: ['tarragona', 'tarraconense'],
+      lleida: ['lleida', 'lerida', 'leridano', 'leridana', 'leridà'],
+      girona: ['girona', 'gerona', 'gerundense'],
+      zaragoza: ['zaragoza', 'zaragozano', 'zaragozana'],
+      teruel: ['teruel', 'turolense'],
+      huesca: ['huesca', 'oscense'],
+      sevilla: ['sevilla', 'sevillano', 'sevillana'],
+      cordoba: ['cordoba', 'cordobes', 'cordobesa', 'cordobés'],
+      jaen: ['jaen', 'jiennense'],
+      malaga: ['malaga', 'malagueno', 'malaguena', 'malagueño', 'malagueña'],
+      cadiz: ['cadiz', 'gaditano', 'gaditana', 'gaditanos', 'gaditanas', 'estrecho'],
+      huelva: ['huelva', 'onubense'],
+      badajoz: ['badajoz', 'pacense'],
+      caceres: ['caceres', 'cacereno', 'cacerena', 'cacereño', 'cacereña']
+    };
+
     function ponerHoraSalidaPorDefecto() {
       const input = document.getElementById('horaSalida');
       const ahora = new Date();
@@ -665,21 +693,60 @@
         .trim();
     }
 
+    function getProvinceAliases(provincia) {
+      const key = normalizeText(provincia);
+      return PROVINCE_ALIASES[key] || [key];
+    }
+
+    function textoContieneProvincia(texto, provincia) {
+      const t = normalizeText(texto);
+      return getProvinceAliases(provincia).some(alias => t.includes(normalizeText(alias)));
+    }
+
     function htmlToPlainText(html) {
+      let normalized = String(html || '');
+      normalized = normalized.replace(/<br\s*\/?>/gi, '\n');
+      normalized = normalized.replace(/<\/(div|p|li|h1|h2|h3|h4|h5|h6|section|article|summary|details)>/gi, '\n');
+      normalized = normalized.replace(/<hr\s*\/?>/gi, '\n--------------------\n');
+
       const div = document.createElement('div');
-      div.innerHTML = html || '';
-      return (div.textContent || div.innerText || '').replace(/\s+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+      div.innerHTML = normalized;
+
+      return (div.textContent || div.innerText || '')
+        .replace(/\u00A0/g, ' ')
+        .replace(/[ \t]+\n/g, '\n')
+        .replace(/\n[ \t]+/g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
+    }
+
+    function sanitizeForPdf(text) {
+      return String(text || '')
+        .replace(/[\u{1F300}-\u{1FAFF}]/gu, '')
+        .replace(/[\u{2600}-\u{27BF}]/gu, '')
+        .replace(/[•●◦▪▫►▸▾▹]/g, '-')
+        .replace(/[^\S\r\n]+/g, ' ')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim();
     }
 
     function safeText(id, fallback = 'No disponible') {
       const el = document.getElementById(id);
       if (!el) return fallback;
-      const text = htmlToPlainText(el.innerHTML || el.textContent || '');
+      const text = sanitizeForPdf(htmlToPlainText(el.innerHTML || el.textContent || ''));
       return text || fallback;
     }
 
-    function addPdfBlock(doc, title, text, y, pageHeight = 285) {
-      if (y > 250) {
+    function addPdfWrappedText(doc, text, x, y, width = 180, lineHeight = 5) {
+      const lines = doc.splitTextToSize(String(text || ''), width);
+      doc.text(lines, x, y);
+      return y + (lines.length * lineHeight);
+    }
+
+    function addPdfBlock(doc, title, text, y, width = 180, pageBottom = 280) {
+      const content = sanitizeForPdf(text || 'No disponible');
+
+      if (y > 245) {
         doc.addPage();
         y = 20;
       }
@@ -692,16 +759,34 @@
       doc.setFont('helvetica', 'normal');
       doc.setFontSize(10);
 
-      const lines = doc.splitTextToSize(text || 'No disponible', 180);
-      doc.text(lines, 15, y);
-      y += lines.length * 5 + 8;
+      const paragraphs = content.split('\n');
+      for (const paragraph of paragraphs) {
+        const txt = paragraph.trim() || ' ';
+        const lines = doc.splitTextToSize(txt, width);
 
-      if (y > pageHeight) {
-        doc.addPage();
-        y = 20;
+        if (y + (lines.length * 5) > pageBottom) {
+          doc.addPage();
+          y = 20;
+        }
+
+        doc.text(lines, 15, y);
+        y += lines.length * 5;
       }
 
+      y += 6;
       return y;
+    }
+
+    function addPdfFooter(doc) {
+      const pages = doc.getNumberOfPages();
+
+      for (let i = 1; i <= pages; i++) {
+        doc.setPage(i);
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(9);
+        doc.text('MeteoRuta Pro · Rubén López de Quero', 15, 285);
+        doc.text(`Página ${i} de ${pages}`, 170, 285, { align: 'right' });
+      }
     }
 
     function generarPDFPro() {
@@ -756,10 +841,10 @@
         y += 8;
         doc.setFont('helvetica', 'normal');
         doc.setFontSize(10);
-        doc.text('Generado automáticamente por MeteoRuta Pro', 15, y);
+        doc.text('Generado automaticamente por MeteoRuta Pro', 15, y);
 
-        y += 8;
-        doc.text(`Fecha de generación: ${fechaGeneracion}`, 15, y);
+        y += 7;
+        doc.text(`Fecha de generacion: ${fechaGeneracion}`, 15, y);
 
         y += 12;
         doc.setFont('helvetica', 'bold');
@@ -769,32 +854,32 @@
         y += 8;
         doc.setFont('helvetica', 'normal');
         doc.setFontSize(10);
-        doc.text(doc.splitTextToSize(`Origen: ${currentOrigenTxt}`, 180), 15, y);
-        y += 6;
-        doc.text(doc.splitTextToSize(`Destino: ${currentDestinoTxt}`, 180), 15, y);
-        y += 6;
-        doc.text(`Hora de salida: ${salida}`, 15, y);
-        y += 6;
-        doc.text(`Hora estimada de llegada: ${llegada}`, 15, y);
+        y = addPdfWrappedText(doc, `Origen: ${sanitizeForPdf(currentOrigenTxt)}`, 15, y);
+        y += 2;
+        y = addPdfWrappedText(doc, `Destino: ${sanitizeForPdf(currentDestinoTxt)}`, 15, y);
+        y += 2;
+        y = addPdfWrappedText(doc, `Hora de salida: ${salida}`, 15, y);
+        y += 2;
+        y = addPdfWrappedText(doc, `Hora estimada de llegada: ${llegada}`, 15, y);
+        y += 8;
 
-        y += 10;
         y = addPdfBlock(doc, '2. Resumen de ruta', resumen, y);
         y = addPdfBlock(doc, '3. Estado de la ruta', estadoRuta, y);
-        y = addPdfBlock(doc, '4. Evaluación MeteoRuta Pro', meteorutaProResultado, y);
+        y = addPdfBlock(doc, '4. Evaluacion MeteoRuta Pro', meteorutaProResultado, y);
         y = addPdfBlock(doc, '5. Ruta inteligente', rutaInteligenteResultado, y);
         y = addPdfBlock(doc, '6. Alertas Pro', alertasPro, y);
         y = addPdfBlock(doc, '7. Tramos conflictivos', tramosConflictivosTxt, y);
         y = addPdfBlock(doc, '8. Tramos de riesgo MeteoRuta Pro', tramosRiesgoProTxt, y);
-        y = addPdfBlock(doc, '9. Previsión meteorológica de la ruta', meteoRuta, y);
+        y = addPdfBlock(doc, '9. Prevision meteorologica de la ruta', meteoRuta, y);
         y = addPdfBlock(doc, '10. Meteo durante el trayecto', meteoTrayecto, y);
         y = addPdfBlock(doc, '11. Llegada al destino', meteoLlegada, y);
-        y = addPdfBlock(doc, '12. Próximos días en destino', meteoDestinoDias, y);
+        y = addPdfBlock(doc, '12. Proximos dias en destino', meteoDestinoDias, y);
         y = addPdfBlock(doc, '13. Nivel oficial en la ruta', nivelAviso, y);
         y = addPdfBlock(doc, '14. Provincias detectadas', provinciasRuta, y);
         y = addPdfBlock(doc, '15. Avisos oficiales', avisosOficiales, y);
         y = addPdfBlock(doc, '16. Lluvia sobre la ruta', lluviaRutaEstado, y);
 
-        if (y > 230) {
+        if (y > 240) {
           doc.addPage();
           y = 20;
         }
@@ -808,10 +893,10 @@
         doc.setFontSize(10);
 
         consejos.forEach((consejo, index) => {
-          const line = `${index + 1}. ${consejo}`;
-          const lines = doc.splitTextToSize(line, 180);
+          const text = `${index + 1}. ${sanitizeForPdf(consejo)}`;
+          const lines = doc.splitTextToSize(text, 180);
 
-          if (y > 270) {
+          if (y + (lines.length * 5) > 280) {
             doc.addPage();
             y = 20;
           }
@@ -820,18 +905,12 @@
           y += lines.length * 5 + 3;
         });
 
-        if (y > 255) {
-          doc.addPage();
-          y = 20;
-        }
+        addPdfFooter(doc);
 
         const nombreArchivo = `MeteoRuta_PRO_${currentOrigenTxt}_${currentDestinoTxt}`
           .replace(/[^\w\-]+/g, '_')
           .replace(/_+/g, '_')
           .substring(0, 80) + '.pdf';
-
-        doc.setFontSize(9);
-        doc.text('MeteoRuta Pro · Rubén López de Quero', 15, 285);
 
         doc.save(nombreArchivo);
       } catch (error) {
@@ -905,10 +984,10 @@
       };
 
       const textos = {
-        verde: '✅ Estado de la ruta: SIN AVISOS RELEVANTES',
-        amarillo: '⚠️ Estado de la ruta: AVISO AMARILLO',
-        naranja: '🚧 Estado de la ruta: AVISO NARANJA',
-        rojo: '⛔ Estado de la ruta: AVISO ROJO'
+        verde: 'Estado de la ruta: SIN AVISOS RELEVANTES',
+        amarillo: 'Estado de la ruta: AVISO AMARILLO',
+        naranja: 'Estado de la ruta: AVISO NARANJA',
+        rojo: 'Estado de la ruta: AVISO ROJO'
       };
 
       document.getElementById('riesgoGlobalBanner').innerHTML = `
@@ -1023,16 +1102,10 @@
     function extraerProvinciaDesdeTexto(nombre) {
       const t = normalizeText(nombre);
 
-      const provincias = [
-        'alicante', 'castellon', 'valencia', 'murcia', 'albacete',
-        'cuenca', 'madrid', 'toledo', 'almeria', 'granada',
-        'barcelona', 'tarragona', 'lleida', 'girona', 'zaragoza',
-        'teruel', 'huesca', 'sevilla', 'cordoba', 'jaen',
-        'malaga', 'cadiz', 'huelva', 'badajoz', 'caceres'
-      ];
-
-      for (const p of provincias) {
-        if (t.includes(p)) return p;
+      for (const provincia of Object.keys(PROVINCE_ALIASES)) {
+        if (textoContieneProvincia(t, provincia)) {
+          return provincia;
+        }
       }
 
       return null;
@@ -1111,19 +1184,29 @@
     }
 
     function avisoAplicaAPunto(aviso, punto) {
-      const area = normalizeText(aviso.areaDesc || '');
       const nombre = normalizeText(punto.nombre || '');
       const provinciaPunto = extraerProvinciaDesdeTexto(punto.nombre || '');
+      const area = normalizeText(aviso.areaDesc || '');
+      const headline = normalizeText(aviso.headline || '');
+      const description = normalizeText(aviso.description || '');
+      const event = normalizeText(aviso.event || '');
+      const texto = [area, headline, description, event].join(' ').trim();
 
-      if (provinciaPunto && area.includes(provinciaPunto)) {
-        return true;
+      let score = 0;
+
+      if (provinciaPunto && textoContieneProvincia(texto, provinciaPunto)) {
+        score += 100;
       }
 
-      if (nombre && area && nombre.includes(area)) {
-        return true;
+      if (nombre && area && (nombre.includes(area) || area.includes(nombre))) {
+        score += 80;
       }
 
-      return false;
+      const tokensNombre = nombre.split(' ').filter(w => w.length >= 5);
+      const coincidencias = tokensNombre.filter(tok => texto.includes(tok)).length;
+      score += coincidencias * 8;
+
+      return score >= 60;
     }
 
     function obtenerAvisosParaPunto(punto, avisos) {
@@ -1577,13 +1660,13 @@
       let color = '';
 
       if ((data.riesgoGlobal ?? 0) >= 70) {
-        recomendacion = '🚫 No recomendable salir';
+        recomendacion = 'No recomendable salir';
         color = '#dc2626';
       } else if ((data.riesgoGlobal ?? 0) >= 40) {
-        recomendacion = '⚠️ Precaución en ruta';
+        recomendacion = 'Precaución en ruta';
         color = '#f97316';
       } else {
-        recomendacion = '✅ Buen momento para viajar';
+        recomendacion = 'Buen momento para viajar';
         color = '#16a34a';
       }
 
@@ -1641,10 +1724,10 @@
       return `
         <div class="forecast-card">
           <div class="forecast-title">${p.nombre || 'Ruta'}</div>
-          <div class="compact-line">🕒 ${formatDateTimeEs(p.horaPaso)}</div>
-          <div class="compact-line">☁️ ${p.estado || 'Sin dato'}</div>
-          <div class="compact-line">🌡️ ${p.temperatura ?? '—'}°C | 🌧️ ${p.probLluvia ?? '—'}% | 💨 ${p.viento ?? '—'} km/h</div>
-          <div class="compact-line">💧 ${p.precipitacion ?? '—'} mm</div>
+          <div class="compact-line">Hora: ${formatDateTimeEs(p.horaPaso)}</div>
+          <div class="compact-line">Estado: ${p.estado || 'Sin dato'}</div>
+          <div class="compact-line">Temperatura: ${p.temperatura ?? '—'}°C | Prob. lluvia: ${p.probLluvia ?? '—'}% | Viento: ${p.viento ?? '—'} km/h</div>
+          <div class="compact-line">Precipitación: ${p.precipitacion ?? '—'} mm</div>
         </div>
       `;
     }
@@ -1961,10 +2044,10 @@
       cont.innerHTML = `
         <div class="forecast-card">
           <div class="forecast-title">Condiciones a la llegada</div>
-          <div class="compact-line">🕒 ${formatDateTimeEs(llegada.hora)}</div>
-          <div class="compact-line">☁️ ${llegada.estado || 'Sin dato'}</div>
-          <div class="compact-line">🌡️ ${llegada.temperatura ?? '—'}°C | 🌧️ ${llegada.probLluvia ?? '—'}% | 💨 ${llegada.viento ?? '—'} km/h</div>
-          <div class="compact-line">💧 ${llegada.precipitacion ?? '—'} mm</div>
+          <div class="compact-line">Hora: ${formatDateTimeEs(llegada.hora)}</div>
+          <div class="compact-line">Estado: ${llegada.estado || 'Sin dato'}</div>
+          <div class="compact-line">Temperatura: ${llegada.temperatura ?? '—'}°C | Prob. lluvia: ${llegada.probLluvia ?? '—'}% | Viento: ${llegada.viento ?? '—'} km/h</div>
+          <div class="compact-line">Precipitación: ${llegada.precipitacion ?? '—'} mm</div>
         </div>
       `;
     }
@@ -1980,9 +2063,9 @@
       cont.innerHTML = dias.map(d => `
         <div class="forecast-card">
           <div class="forecast-title">${formatDateEs(d.fecha)}</div>
-          <div class="compact-line">☁️ ${d.estado || 'Sin dato'}</div>
-          <div class="compact-line">🌡️ Máx ${d.tempMax ?? '—'}°C | Mín ${d.tempMin ?? '—'}°C</div>
-          <div class="compact-line">🌧️ ${d.probLluviaMax ?? '—'}% | 💨 ${d.vientoMax ?? '—'} km/h</div>
+          <div class="compact-line">Estado: ${d.estado || 'Sin dato'}</div>
+          <div class="compact-line">Máx ${d.tempMax ?? '—'}°C | Mín ${d.tempMin ?? '—'}°C</div>
+          <div class="compact-line">Prob. lluvia: ${d.probLluviaMax ?? '—'}% | Viento: ${d.vientoMax ?? '—'} km/h</div>
         </div>
       `).join('');
     }
