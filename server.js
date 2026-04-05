@@ -484,19 +484,51 @@ function penalizacionAviso(nivel) {
   return 0;
 }
 
+const PROVINCE_ALIASES = {
+  alicante: ['alicante', 'alacant', 'alicantino', 'alicantina'],
+  castellon: ['castellon', 'castello', 'castellonense'],
+  valencia: ['valencia', 'valenciana', 'valenciano'],
+  murcia: ['murcia', 'murciano', 'murciana'],
+  albacete: ['albacete', 'albaceteno', 'albacetena'],
+  cuenca: ['cuenca', 'conquense'],
+  madrid: ['madrid', 'madrileno', 'madrilena'],
+  toledo: ['toledo', 'toledano', 'toledana'],
+  almeria: ['almeria', 'almeriense'],
+  granada: ['granada', 'granadino', 'granadina'],
+  barcelona: ['barcelona', 'barcelones', 'barcelonesa'],
+  tarragona: ['tarragona', 'tarraconense'],
+  lleida: ['lleida', 'lerida', 'leridano', 'leridana'],
+  girona: ['girona', 'gerona', 'gerundense'],
+  zaragoza: ['zaragoza', 'zaragozano', 'zaragozana'],
+  teruel: ['teruel', 'turolense'],
+  huesca: ['huesca', 'oscense'],
+  sevilla: ['sevilla', 'sevillano', 'sevillana'],
+  cordoba: ['cordoba', 'cordobes', 'cordobesa'],
+  jaen: ['jaen', 'jiennense'],
+  malaga: ['malaga', 'malagueno', 'malaguena', 'malagueno', 'malaguena'],
+  cadiz: ['cadiz', 'gaditano', 'gaditana', 'gaditanos', 'gaditanas', 'estrecho'],
+  huelva: ['huelva', 'onubense'],
+  badajoz: ['badajoz', 'pacense'],
+  caceres: ['caceres', 'cacereno', 'cacerena', 'cacereño', 'cacereña']
+};
+
+function getProvinceAliases(provincia) {
+  const key = normalizeText(provincia);
+  return PROVINCE_ALIASES[key] || [key];
+}
+
+function textoContieneProvincia(texto, provincia) {
+  const t = normalizeText(texto);
+  return getProvinceAliases(provincia).some(alias => t.includes(normalizeText(alias)));
+}
+
 function extraerProvinciaDesdeTexto(nombre) {
   const t = normalizeText(nombre);
 
-  const provincias = [
-    'alicante', 'castellon', 'valencia', 'murcia', 'albacete',
-    'cuenca', 'madrid', 'toledo', 'almeria', 'granada',
-    'barcelona', 'tarragona', 'lleida', 'girona', 'zaragoza',
-    'teruel', 'huesca', 'sevilla', 'cordoba', 'jaen',
-    'malaga', 'cadiz', 'huelva', 'badajoz', 'caceres'
-  ];
-
-  for (const p of provincias) {
-    if (t.includes(p)) return p;
+  for (const provincia of Object.keys(PROVINCE_ALIASES)) {
+    if (textoContieneProvincia(t, provincia)) {
+      return provincia;
+    }
   }
 
   return null;
@@ -513,24 +545,51 @@ function extraerProvinciasRutaDesdePuntos(puntos) {
   return Array.from(set);
 }
 
+function avisoCoincideConProvincia(aviso, provincia) {
+  const texto = normalizeText(
+    [aviso.areaDesc, aviso.headline, aviso.description, aviso.event].join(' ')
+  );
+
+  return textoContieneProvincia(texto, provincia);
+}
+
 function avisoParaPunto(punto, avisos) {
   const nombre = normalizeText(punto.nombre || '');
   const provinciaPunto = extraerProvinciaDesdeTexto(punto.nombre || '');
 
+  let mejor = null;
+  let mejorScore = -1;
+
   for (const aviso of avisos) {
     const area = normalizeText(aviso.areaDesc || '');
-    if (!area) continue;
+    const headline = normalizeText(aviso.headline || '');
+    const description = normalizeText(aviso.description || '');
+    const event = normalizeText(aviso.event || '');
 
-    if (provinciaPunto && area.includes(provinciaPunto)) {
-      return aviso;
+    const texto = [area, headline, description, event].join(' ').trim();
+    if (!texto) continue;
+
+    let score = 0;
+
+    if (provinciaPunto && avisoCoincideConProvincia(aviso, provinciaPunto)) {
+      score += 100;
     }
 
-    if (nombre && (nombre.includes(area) || area.includes(nombre))) {
-      return aviso;
+    if (nombre && area && (nombre.includes(area) || area.includes(nombre))) {
+      score += 80;
+    }
+
+    const tokensNombre = nombre.split(' ').filter(w => w.length >= 5);
+    const coincidencias = tokensNombre.filter(tok => texto.includes(tok)).length;
+    score += coincidencias * 8;
+
+    if (score > mejorScore) {
+      mejor = aviso;
+      mejorScore = score;
     }
   }
 
-  return null;
+  return mejorScore >= 60 ? mejor : null;
 }
 
 function buildRiskSummary(nombre, hourlyForecast, horaPaso, risk, aviso = null) {
@@ -975,12 +1034,8 @@ app.get('/api/avisos-oficiales', async (req, res) => {
     const activos = avisos.filter(a => avisoActivoEnHora(a, fechaSalida));
 
     const relacionados = activos.filter(a => {
-      const texto = normalizeText(
-        [a.areaDesc, a.headline, a.description, a.event].join(' ')
-      );
-
       if (!provincias.length) return true;
-      return provincias.some(p => texto.includes(p));
+      return provincias.some(p => avisoCoincideConProvincia(a, p));
     });
 
     const salida = relacionados.map(a => ({
