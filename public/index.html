@@ -1,1852 +1,925 @@
-<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script>
-  const map = L.map('map').setView([40.4168, -3.7038], 6);
-
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    attribution: '© OpenStreetMap'
-  }).addTo(map);
-
-  let rutaLayer = null;
-  let markersLayer = L.layerGroup().addTo(map);
-  let tOrigen = null;
-  let tDestino = null;
-
-  let radarLayer = null;
-  let radarVisible = true;
-  let radarOpacity = 0.45;
-  let radarFrames = [];
-  let radarFrameIndex = 0;
-  let radarAnimationInterval = null;
-  let radarHost = 'https://tilecache.rainviewer.com';
-
-  let currentRouteCoords = [];
-  let currentRouteDurationSec = 0;
-  let currentFechaSalida = null;
-  let currentDestino = null;
-  let rainPointsLayer = null;
-
-  let avisoTramosLayer = null;
-  let avisoPinsLayer = null;
-  let tramosConflictivos = [];
-
-  let riesgoProPinsLayer = null;
-  let riesgoProRouteLayer = null;
-
-  let legendControl = null;
-  let currentRoutePoints = [];
-  let currentOrigenTxt = '';
-  let currentDestinoTxt = '';
-  let currentProvinciasRuta = [];
-  let lastRiskAnalysis = null;
-  let lastBestDeparture = null;
-  let lastSmartRoute = null;
-
-  const PROVINCE_ALIASES = {
-    alicante: ['alicante', 'alacant', 'alicantino', 'alicantina'],
-    castellon: ['castellon', 'castello', 'castellonense'],
-    valencia: ['valencia', 'valenciano', 'valenciana'],
-    murcia: ['murcia', 'murciano', 'murciana'],
-    albacete: ['albacete', 'albaceteno', 'albacetena', 'albaceteño', 'albaceteña'],
-    cuenca: ['cuenca', 'conquense'],
-    madrid: ['madrid', 'madrileno', 'madrilena', 'madrileño', 'madrileña'],
-    toledo: ['toledo', 'toledano', 'toledana'],
-    almeria: ['almeria', 'almeriense'],
-    granada: ['granada', 'granadino', 'granadina'],
-    barcelona: ['barcelona', 'barcelones', 'barcelonesa', 'barcelonés'],
-    tarragona: ['tarragona', 'tarraconense'],
-    lleida: ['lleida', 'lerida', 'leridano', 'leridana', 'leridà'],
-    girona: ['girona', 'gerona', 'gerundense'],
-    zaragoza: ['zaragoza', 'zaragozano', 'zaragozana'],
-    teruel: ['teruel', 'turolense'],
-    huesca: ['huesca', 'oscense'],
-    sevilla: ['sevilla', 'sevillano', 'sevillana'],
-    cordoba: ['cordoba', 'cordobes', 'cordobesa', 'cordobés'],
-    jaen: ['jaen', 'jiennense'],
-    malaga: ['malaga', 'malagueno', 'malaguena', 'malagueño', 'malagueña'],
-    cadiz: ['cadiz', 'gaditano', 'gaditana', 'gaditanos', 'gaditanas', 'estrecho'],
-    huelva: ['huelva', 'onubense'],
-    badajoz: ['badajoz', 'pacense'],
-    caceres: ['caceres', 'cacereno', 'cacerena', 'cacereño', 'cacereña']
-  };
-
-  function ponerHoraSalidaPorDefecto() {
-    const input = document.getElementById('horaSalida');
-    const ahora = new Date();
-    ahora.setMinutes(0, 0, 0);
-    const local = new Date(ahora.getTime() - ahora.getTimezoneOffset() * 60000)
-      .toISOString()
-      .slice(0, 16);
-    input.value = local;
-  }
-
-  ponerHoraSalidaPorDefecto();
-
-  function normalizeText(text) {
-    return (text || '')
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^\w\s-]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-  }
-
-  function getProvinceAliases(provincia) {
-    const key = normalizeText(provincia);
-    return PROVINCE_ALIASES[key] || [key];
-  }
-
-  function textoContieneProvincia(texto, provincia) {
-    const t = normalizeText(texto);
-    return getProvinceAliases(provincia).some(alias => t.includes(normalizeText(alias)));
-  }
-
-  function htmlToPlainText(html) {
-    let normalized = String(html || '');
-    normalized = normalized.replace(/<br\s*\/?>/gi, '\n');
-    normalized = normalized.replace(/<\/(div|p|li|h1|h2|h3|h4|h5|h6|section|article|summary|details)>/gi, '\n');
-    normalized = normalized.replace(/<hr\s*\/?>/gi, '\n--------------------\n');
-
-    const div = document.createElement('div');
-    div.innerHTML = normalized;
-
-    return (div.textContent || div.innerText || '')
-      .replace(/\u00A0/g, ' ')
-      .replace(/[ \t]+\n/g, '\n')
-      .replace(/\n[ \t]+/g, '\n')
-      .replace(/\n{3,}/g, '\n\n')
-      .trim();
-  }
-
-  function sanitizeForPdf(text) {
-    return String(text || '')
-      .replace(/[\u{1F300}-\u{1FAFF}]/gu, '')
-      .replace(/[\u{2600}-\u{27BF}]/gu, '')
-      .replace(/[•●◦▪▫►▸▾▹]/g, '-')
-      .replace(/[^\S\r\n]+/g, ' ')
-      .replace(/\n{3,}/g, '\n\n')
-      .trim();
-  }
-
-  function safeText(id, fallback = 'No disponible') {
-    const el = document.getElementById(id);
-    if (!el) return fallback;
-    const text = sanitizeForPdf(htmlToPlainText(el.innerHTML || el.textContent || ''));
-    return text || fallback;
-  }
-
-  function addPdfWrappedText(doc, text, x, y, width = 180, lineHeight = 5) {
-    const lines = doc.splitTextToSize(String(text || ''), width);
-    doc.text(lines, x, y);
-    return y + (lines.length * lineHeight);
-  }
-
-  function addPdfBlock(doc, title, text, y, width = 180, pageBottom = 280) {
-    const content = sanitizeForPdf(text || 'No disponible');
-
-    if (y > 245) {
-      doc.addPage();
-      y = 20;
-    }
-
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(13);
-    doc.text(title, 15, y);
-    y += 8;
-
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(10);
-
-    const paragraphs = content.split('\n');
-    for (const paragraph of paragraphs) {
-      const txt = paragraph.trim() || ' ';
-      const lines = doc.splitTextToSize(txt, width);
-
-      if (y + (lines.length * 5) > pageBottom) {
-        doc.addPage();
-        y = 20;
-      }
-
-      doc.text(lines, 15, y);
-      y += lines.length * 5;
-    }
-
-    y += 6;
-    return y;
-  }
-
-  function addPdfFooter(doc) {
-    const pages = doc.getNumberOfPages();
-
-    for (let i = 1; i <= pages; i++) {
-      doc.setPage(i);
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(9);
-      doc.text('MeteoRuta Pro · Rubén López de Quero', 15, 285);
-      doc.text(`Página ${i} de ${pages}`, 170, 285, { align: 'right' });
-    }
-  }
-
-  function generarPDFPro() {
-    try {
-      if (!currentOrigenTxt || !currentDestinoTxt) {
-        alert('Primero calcula una ruta antes de generar el PDF.');
-        return;
-      }
-
-      const { jsPDF } = window.jspdf;
-      const doc = new jsPDF();
-
-      const fechaGeneracion = new Date().toLocaleString('es-ES');
-      const salida = currentFechaSalida ? currentFechaSalida.toLocaleString('es-ES') : 'No disponible';
-      const llegada = currentFechaSalida && currentRouteDurationSec
-        ? new Date(currentFechaSalida.getTime() + currentRouteDurationSec * 1000).toLocaleString('es-ES')
-        : 'No disponible';
-
-      const resumen = safeText('resumen');
-      const estadoRuta = safeText('estadoRuta');
-      const meteoRuta = safeText('meteoRuta');
-      const meteoTrayecto = safeText('meteoTrayecto');
-      const meteoLlegada = safeText('meteoLlegada');
-      const meteoDestinoDias = safeText('meteoDestinoDias');
-      const nivelAviso = safeText('nivelAviso');
-      const provinciasRuta = safeText('provinciasRuta');
-      const avisosOficiales = safeText('avisosOficiales');
-      const lluviaRutaEstado = safeText('lluviaRutaEstado');
-      const tramosConflictivosTxt = safeText('tramosConflictivos');
-      const tramosRiesgoProTxt = safeText('tramosRiesgoPro');
-      const meteorutaProResultado = safeText('meteorutaProResultado');
-      const alertasPro = safeText('alertasPro');
-      const rutaInteligenteResultado = safeText('rutaInteligenteResultado');
-
-      const consejos = [
-        'Consultar radar, avisos oficiales y previsión antes de iniciar el trayecto.',
-        'Valorar retrasar la salida si existen avisos naranja o rojo, tormenta prevista o lluvia intensa.',
-        'Extremar la precaución en tramos señalados como conflictivos o de riesgo alto.',
-        'Aumentar la distancia de seguridad y moderar la velocidad con lluvia, viento o baja visibilidad.',
-        'No atravesar zonas inundables, balsas de agua o viales anegados.',
-        'Mantener el móvil cargado y compartir itinerario y hora estimada de llegada.',
-        'Revisar combustible, neumáticos, limpiaparabrisas y luces antes de la salida.',
-        'En caso de empeoramiento rápido, detener el viaje en un lugar seguro y reevaluar.'
-      ];
-
-      let y = 18;
-
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(18);
-      doc.text('INFORME METEORUTA PRO', 15, y);
-
-      y += 8;
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(10);
-      doc.text('Generado automaticamente por MeteoRuta Pro', 15, y);
-
-      y += 7;
-      doc.text(`Fecha de generacion: ${fechaGeneracion}`, 15, y);
-
-      y += 12;
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(13);
-      doc.text('1. Datos generales de la ruta', 15, y);
-
-      y += 8;
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(10);
-      y = addPdfWrappedText(doc, `Origen: ${sanitizeForPdf(currentOrigenTxt)}`, 15, y);
-      y += 2;
-      y = addPdfWrappedText(doc, `Destino: ${sanitizeForPdf(currentDestinoTxt)}`, 15, y);
-      y += 2;
-      y = addPdfWrappedText(doc, `Hora de salida: ${salida}`, 15, y);
-      y += 2;
-      y = addPdfWrappedText(doc, `Hora estimada de llegada: ${llegada}`, 15, y);
-      y += 8;
-
-      y = addPdfBlock(doc, '2. Resumen de ruta', resumen, y);
-      y = addPdfBlock(doc, '3. Estado de la ruta', estadoRuta, y);
-      y = addPdfBlock(doc, '4. Evaluacion MeteoRuta Pro', meteorutaProResultado, y);
-      y = addPdfBlock(doc, '5. Ruta inteligente', rutaInteligenteResultado, y);
-      y = addPdfBlock(doc, '6. Alertas Pro', alertasPro, y);
-      y = addPdfBlock(doc, '7. Tramos conflictivos', tramosConflictivosTxt, y);
-      y = addPdfBlock(doc, '8. Tramos de riesgo MeteoRuta Pro', tramosRiesgoProTxt, y);
-      y = addPdfBlock(doc, '9. Prevision meteorologica de la ruta', meteoRuta, y);
-      y = addPdfBlock(doc, '10. Meteo durante el trayecto', meteoTrayecto, y);
-      y = addPdfBlock(doc, '11. Llegada al destino', meteoLlegada, y);
-      y = addPdfBlock(doc, '12. Proximos dias en destino', meteoDestinoDias, y);
-      y = addPdfBlock(doc, '13. Nivel oficial en la ruta', nivelAviso, y);
-      y = addPdfBlock(doc, '14. Provincias detectadas', provinciasRuta, y);
-      y = addPdfBlock(doc, '15. Avisos oficiales', avisosOficiales, y);
-      y = addPdfBlock(doc, '16. Lluvia sobre la ruta', lluviaRutaEstado, y);
-
-      if (y > 240) {
-        doc.addPage();
-        y = 20;
-      }
-
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(13);
-      doc.text('17. Consejos preventivos', 15, y);
-      y += 8;
-
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(10);
-
-      consejos.forEach((consejo, index) => {
-        const text = `${index + 1}. ${sanitizeForPdf(consejo)}`;
-        const lines = doc.splitTextToSize(text, 180);
-
-        if (y + (lines.length * 5) > 280) {
-          doc.addPage();
-          y = 20;
-        }
-
-        doc.text(lines, 15, y);
-        y += lines.length * 5 + 3;
-      });
-
-      addPdfFooter(doc);
-
-      const nombreArchivo = `MeteoRuta_PRO_${currentOrigenTxt}_${currentDestinoTxt}`
-        .replace(/[^\w\-]+/g, '_')
-        .replace(/_+/g, '_')
-        .substring(0, 80) + '.pdf';
-
-      doc.save(nombreArchivo);
-    } catch (error) {
-      console.error(error);
-      alert('No se pudo generar el PDF PRO.');
-    }
-  }
-
-  function colorAviso(nivel) {
-    if (nivel === 'rojo') return '#dc2626';
-    if (nivel === 'naranja') return '#f97316';
-    if (nivel === 'amarillo') return '#eab308';
-    return '#16a34a';
-  }
-
-  function badgeAviso(nivel) {
-    if (nivel === 'rojo') return '<span class="badge rojo">Aviso rojo</span>';
-    if (nivel === 'naranja') return '<span class="badge naranja">Aviso naranja</span>';
-    if (nivel === 'amarillo') return '<span class="badge amarillo">Aviso amarillo</span>';
-    return '<span class="badge verde">Sin avisos relevantes</span>';
-  }
-
-  function peorAviso(lista) {
-    if (lista.includes('rojo')) return 'rojo';
-    if (lista.includes('naranja')) return 'naranja';
-    if (lista.includes('amarillo')) return 'amarillo';
-    return 'verde';
-  }
-
-  function pesoNivel(nivel) {
-    if (nivel === 'rojo') return 3;
-    if (nivel === 'naranja') return 2;
-    if (nivel === 'amarillo') return 1;
-    return 0;
-  }
-
-  function colorTramoAviso(nivel) {
-    if (nivel === 'rojo') return '#dc2626';
-    if (nivel === 'naranja') return '#f97316';
-    if (nivel === 'amarillo') return '#eab308';
-    return '#16a34a';
-  }
-
-  function pillTramo(nivel) {
-    if (nivel === 'rojo') return '<span class="tramo-pill pill-rojo">Aviso rojo</span>';
-    if (nivel === 'naranja') return '<span class="tramo-pill pill-naranja">Aviso naranja</span>';
-    if (nivel === 'amarillo') return '<span class="tramo-pill pill-amarillo">Aviso amarillo</span>';
-    return '<span class="tramo-pill pill-verde">Sin aviso</span>';
-  }
-
-  function pillRiesgo(nivel) {
-    if (nivel === 'muy alto') return '<span class="tramo-pill pill-rojo">Riesgo muy alto</span>';
-    if (nivel === 'alto') return '<span class="tramo-pill pill-naranja">Riesgo alto</span>';
-    if (nivel === 'moderado') return '<span class="tramo-pill pill-amarillo">Riesgo moderado</span>';
-    return '<span class="tramo-pill pill-verde">Riesgo bajo</span>';
-  }
-
-  function colorRiesgoHex(color) {
-    if (color === 'rojo') return '#dc2626';
-    if (color === 'naranja') return '#f97316';
-    if (color === 'amarillo') return '#eab308';
-    return '#16a34a';
-  }
-
-  function pintarBannerRiesgo(nivel) {
-    const colores = {
-      verde: '#16a34a',
-      amarillo: '#eab308',
-      naranja: '#f97316',
-      rojo: '#dc2626'
-    };
-
-    const textos = {
-      verde: 'Estado de la ruta: SIN AVISOS RELEVANTES',
-      amarillo: 'Estado de la ruta: AVISO AMARILLO',
-      naranja: 'Estado de la ruta: AVISO NARANJA',
-      rojo: 'Estado de la ruta: AVISO ROJO'
-    };
-
-    document.getElementById('riesgoGlobalBanner').innerHTML = `
-      <div class="banner-box" style="background:${colores[nivel] || '#334155'};">
-        ${textos[nivel] || 'Estado de la ruta'}
-      </div>
-    `;
-  }
-
-  function ensureLegend() {
-    if (legendControl) return;
-
-    legendControl = L.control({ position: 'bottomright' });
-
-    legendControl.onAdd = function () {
-      const div = L.DomUtil.create('div', 'legend-control');
-      div.innerHTML = `
-        <div class="legend-title">Leyenda</div>
-        <div class="legend-row"><span class="legend-color" style="background:#16a34a;"></span><span>Ruta sin aviso</span></div>
-        <div class="legend-row"><span class="legend-color" style="background:#eab308;"></span><span>Ruta con aviso amarillo</span></div>
-        <div class="legend-row"><span class="legend-color" style="background:#f97316;"></span><span>Ruta con aviso naranja</span></div>
-        <div class="legend-row"><span class="legend-color" style="background:#dc2626;"></span><span>Ruta con aviso rojo</span></div>
-        <div class="legend-row"><span class="legend-color" style="background:#2563eb;"></span><span>Lluvia detectada</span></div>
-      `;
-      return div;
-    };
-
-    legendControl.addTo(map);
-  }
-
-  function formatDateTimeEs(value) {
-    if (!value) return 'No disponible';
-    const d = new Date(value);
-    if (isNaN(d.getTime())) return 'No disponible';
-    return d.toLocaleString('es-ES');
-  }
-
-  function formatDateEs(value) {
-    if (!value) return 'No disponible';
-    const d = new Date(value);
-    if (isNaN(d.getTime())) return value;
-    return d.toLocaleDateString('es-ES', {
-      weekday: 'short',
-      day: '2-digit',
-      month: '2-digit'
-    });
-  }
-
-  function formatHourOnly(value) {
-    if (!value) return 'No disponible';
-    const d = new Date(value);
-    if (isNaN(d.getTime())) return 'No disponible';
-    return d.toLocaleTimeString('es-ES', { hour: '2-digit', minute: '2-digit' });
-  }
-
-  async function sugerir(inputId, listId) {
-    const texto = document.getElementById(inputId).value.trim();
-    if (texto.length < 2) return;
-
-    const url = "https://nominatim.openstreetmap.org/search?format=json&limit=5&countrycodes=es&q=" + encodeURIComponent(texto);
-    const res = await fetch(url, { headers: { "Accept-Language": "es" } });
-    const data = await res.json();
-
-    const list = document.getElementById(listId);
-    list.innerHTML = "";
-
-    data.forEach(item => {
-      const option = document.createElement("option");
-      option.value = item.display_name;
-      list.appendChild(option);
-    });
-  }
-
-  document.getElementById("origen").addEventListener("input", function () {
-    clearTimeout(tOrigen);
-    tOrigen = setTimeout(() => sugerir("origen", "listaOrigen"), 300);
-  });
-
-  document.getElementById("destino").addEventListener("input", function () {
-    clearTimeout(tDestino);
-    tDestino = setTimeout(() => sugerir("destino", "listaDestino"), 300);
-  });
-
-  async function geocode(lugar) {
-    const res = await fetch(
-      "https://nominatim.openstreetmap.org/search?format=json&limit=1&countrycodes=es&q=" + encodeURIComponent(lugar),
-      { headers: { "Accept-Language": "es" } }
-    );
-
-    const data = await res.json();
-
-    if (!data || data.length === 0) {
-      throw new Error("No se encontró: " + lugar);
-    }
-
-    return {
-      lat: parseFloat(data[0].lat),
-      lon: parseFloat(data[0].lon),
-      nombre: data[0].display_name
-    };
-  }
-
-  async function reverseName(lat, lon) {
-    const res = await fetch(
-      "https://nominatim.openstreetmap.org/reverse?format=json&lat=" + lat + "&lon=" + lon,
-      { headers: { "Accept-Language": "es" } }
-    );
-    const data = await res.json();
-    return data.display_name || (lat + "," + lon);
-  }
-
-  function extraerProvinciaDesdeTexto(nombre) {
-    const t = normalizeText(nombre);
-
-    for (const provincia of Object.keys(PROVINCE_ALIASES)) {
-      if (textoContieneProvincia(t, provincia)) {
-        return provincia;
-      }
-    }
-
-    return null;
-  }
-
-  function extraerProvinciasRuta(origenTxt, destinoTxt, puntos) {
-    const conjunto = new Set();
-    const todos = [origenTxt, destinoTxt, ...puntos.map(p => p.nombre || '')];
-
-    for (const item of todos) {
-      const provincia = extraerProvinciaDesdeTexto(item);
-      if (provincia) conjunto.add(provincia);
-    }
-
-    return Array.from(conjunto);
-  }
-
-  function pintarAvisosOficiales(avisos, infoMeta) {
-    const cont = document.getElementById('avisosOficiales');
-
-    if (!avisos.length) {
-      cont.innerText =
-        'No se han encontrado avisos oficiales activos para la hora de salida en las provincias detectadas.\n\n' +
-        'Avisos totales leídos: ' + infoMeta.totalAvisos + '\n' +
-        'Avisos activos a esa hora: ' + infoMeta.activos + '\n' +
-        'Avisos relacionados con la ruta: ' + infoMeta.relacionados;
-      return;
-    }
-
-    cont.innerHTML = avisos.slice(0, 8).map(aviso => `
-      <div class="alertaBox">
-        <div class="alertaTitulo">${aviso.areaDesc || 'Zona no indicada'}</div>
-        <div><strong>Fenómeno:</strong> ${aviso.event || 'Aviso meteorológico'}</div>
-        <div>${badgeAviso(aviso.nivel)}</div>
-        <div><strong>Desde:</strong> ${aviso.onset ? new Date(aviso.onset).toLocaleString('es-ES') : 'No indicada'}</div>
-        <div><strong>Hasta:</strong> ${aviso.expires ? new Date(aviso.expires).toLocaleString('es-ES') : 'No indicada'}</div>
-        <div style="margin-top:6px;">${aviso.description || aviso.headline || ''}</div>
-      </div>
-    `).join('');
-  }
-
-  function limpiarCapasAvisosRuta() {
-    if (avisoTramosLayer) {
-      map.removeLayer(avisoTramosLayer);
-      avisoTramosLayer = null;
-    }
-
-    if (avisoPinsLayer) {
-      map.removeLayer(avisoPinsLayer);
-      avisoPinsLayer = null;
-    }
-
-    tramosConflictivos = [];
-    document.getElementById('tramosConflictivos').innerHTML = 'Todavía no calculados.';
-  }
-
-  function limpiarRiesgoRutaPro() {
-    if (riesgoProPinsLayer) {
-      map.removeLayer(riesgoProPinsLayer);
-      riesgoProPinsLayer = null;
-    }
-
-    if (riesgoProRouteLayer) {
-      map.removeLayer(riesgoProRouteLayer);
-      riesgoProRouteLayer = null;
-    }
-
-    lastRiskAnalysis = null;
-    lastBestDeparture = null;
-    lastSmartRoute = null;
-
-    document.getElementById('tramosRiesgoPro').innerHTML = 'Todavía no calculados.';
-    document.getElementById('meteorutaProResultado').innerHTML = 'Todavía no calculado.';
-    document.getElementById('alertasPro').innerHTML = 'Todavía no calculadas.';
-    document.getElementById('rutaInteligenteResultado').innerHTML = 'Todavía no calculado.';
-  }
-
-  function avisoAplicaAPunto(aviso, punto) {
-    const nombre = normalizeText(punto.nombre || '');
-    const provinciaPunto = extraerProvinciaDesdeTexto(punto.nombre || '');
-    const area = normalizeText(aviso.areaDesc || '');
-    const headline = normalizeText(aviso.headline || '');
-    const description = normalizeText(aviso.description || '');
-    const event = normalizeText(aviso.event || '');
-    const texto = [area, headline, description, event].join(' ').trim();
-
-    let score = 0;
-
-    if (provinciaPunto && textoContieneProvincia(texto, provinciaPunto)) {
-      score += 100;
-    }
-
-    if (nombre && area && (nombre.includes(area) || area.includes(nombre))) {
-      score += 80;
-    }
-
-    const tokensNombre = nombre.split(' ').filter(w => w.length >= 5);
-    const coincidencias = tokensNombre.filter(tok => texto.includes(tok)).length;
-    score += coincidencias * 8;
-
-    return score >= 60;
-  }
-
-  function obtenerAvisosParaPunto(punto, avisos) {
-    return avisos.filter(aviso => avisoAplicaAPunto(aviso, punto));
-  }
-
-  function obtenerPeorAvisoLista(avisos) {
-    if (!Array.isArray(avisos) || !avisos.length) return null;
-
-    let peor = avisos[0];
-    for (const aviso of avisos) {
-      if (pesoNivel(aviso.nivel) > pesoNivel(peor.nivel)) {
-        peor = aviso;
-      }
-    }
-    return peor;
-  }
-
-  function obtenerPeorAvisoParaPunto(punto, avisos) {
-    const aplicables = obtenerAvisosParaPunto(punto, avisos);
-
-    if (!aplicables.length) {
-      return null;
-    }
-
-    const peor = obtenerPeorAvisoLista(aplicables);
-
-    return {
-      peor,
-      todos: aplicables
-    };
-  }
-
-  function agruparTramosConAviso(segmentos) {
-    const grupos = [];
-
-    for (const seg of segmentos) {
-      if (!grupos.length) {
-        grupos.push({
-          nivel: seg.nivel,
-          startIndex: seg.startIndex,
-          endIndex: seg.endIndex,
-          puntos: [seg.puntoReferenciaInicio, seg.puntoReferenciaFin].filter(Boolean),
-          avisos: [...seg.avisos],
-          routeCoords: [...seg.routeCoords]
+    texto: `La ruta presenta un riesgo global de ${riesgoGlobal}/100. Conviene retrasar la salida o revisar una alternativa.`
         });
-        continue;
-      }
-
-      const ultimo = grupos[grupos.length - 1];
-
-      if (ultimo.nivel === seg.nivel && seg.nivel !== 'verde') {
-        ultimo.endIndex = seg.endIndex;
-        if (seg.puntoReferenciaFin) ultimo.puntos.push(seg.puntoReferenciaFin);
-        ultimo.avisos = combinarAvisos(ultimo.avisos, seg.avisos);
-        ultimo.routeCoords = ultimo.routeCoords.concat(seg.routeCoords.slice(1));
+      } else if (riesgoGlobal >= 40) {
+        alertas.push({
+          nivel: 'media',
+          titulo: 'Precaución en ruta',
+          texto: `La ruta presenta un riesgo global de ${riesgoGlobal}/100. Conviene circular con margen y vigilar los tramos señalados.`
+        });
       } else {
-        grupos.push({
-          nivel: seg.nivel,
-          startIndex: seg.startIndex,
-          endIndex: seg.endIndex,
-          puntos: [seg.puntoReferenciaInicio, seg.puntoReferenciaFin].filter(Boolean),
-          avisos: [...seg.avisos],
-          routeCoords: [...seg.routeCoords]
+        alertas.push({
+          nivel: 'baja',
+          titulo: 'Condiciones razonables para viajar',
+          texto: `La ruta presenta un riesgo global de ${riesgoGlobal}/100. Aun así, revisa radar y avisos antes de salir.`
         });
       }
-    }
 
-    return grupos;
-  }
-
-  function combinarAvisos(listaA, listaB) {
-    const mapa = new Map();
-
-    [...(listaA || []), ...(listaB || [])].forEach(aviso => {
-      const key = [
-        aviso.event || '',
-        aviso.areaDesc || '',
-        aviso.onset || '',
-        aviso.expires || '',
-        aviso.nivel || ''
-      ].join('|');
-
-      if (!mapa.has(key)) {
-        mapa.set(key, aviso);
-      }
-    });
-
-    return Array.from(mapa.values());
-  }
-
-  function crearHtmlAvisos(avisos) {
-    return avisos.map(aviso => `
-      <div style="margin-bottom:8px;">
-        <div><strong>${aviso.event || 'Aviso meteorológico'}</strong></div>
-        <div>${badgeAviso(aviso.nivel)}</div>
-        <div><strong>Zona:</strong> ${aviso.areaDesc || 'No indicada'}</div>
-        <div><strong>Desde:</strong> ${aviso.onset ? new Date(aviso.onset).toLocaleString('es-ES') : 'No indicada'}</div>
-        <div><strong>Hasta:</strong> ${aviso.expires ? new Date(aviso.expires).toLocaleString('es-ES') : 'No indicada'}</div>
-        <div style="margin-top:4px;">${aviso.description || aviso.headline || 'Sin descripción'}</div>
-      </div>
-    `).join('<hr>');
-  }
-
-  function obtenerNivelSegmento(puntoActual, puntoSiguiente, avisos) {
-    const avisosA = obtenerAvisosParaPunto(puntoActual, avisos);
-    const avisosB = obtenerAvisosParaPunto(puntoSiguiente, avisos);
-    const avisosSegmento = combinarAvisos(avisosA, avisosB);
-    const peor = obtenerPeorAvisoLista(avisosSegmento);
-
-    return {
-      nivel: peor?.nivel || 'verde',
-      avisos: avisosSegmento,
-      peor: peor || null
-    };
-  }
-
-  function pintarTramosYAvisos(coords, puntos, avisos) {
-    limpiarCapasAvisosRuta();
-
-    avisoTramosLayer = L.layerGroup().addTo(map);
-    avisoPinsLayer = L.layerGroup().addTo(map);
-
-    if (!coords.length || !puntos.length) return;
-
-    const segmentos = [];
-
-    for (let i = 0; i < puntos.length - 1; i++) {
-      const puntoActual = puntos[i];
-      const puntoSiguiente = puntos[i + 1];
-
-      const startIndex = puntoActual.routeIndex;
-      const endIndex = puntoSiguiente.routeIndex;
-
-      const infoSegmento = obtenerNivelSegmento(puntoActual, puntoSiguiente, avisos);
-      const nivel = infoSegmento.nivel;
-
-      const tramoCoords = coords
-        .slice(startIndex, endIndex + 1)
-        .map(c => [c[1], c[0]]);
-
-      if (tramoCoords.length >= 2) {
-        L.polyline(tramoCoords, {
-          color: colorTramoAviso(nivel),
-          weight: 8,
-          opacity: 0.95,
-          lineCap: 'round',
-          lineJoin: 'round'
-        }).addTo(avisoTramosLayer);
-      }
-
-      segmentos.push({
-        nivel,
-        startIndex,
-        endIndex,
-        puntoReferenciaInicio: puntoActual,
-        puntoReferenciaFin: puntoSiguiente,
-        avisos: infoSegmento.avisos,
-        peor: infoSegmento.peor,
-        routeCoords: tramoCoords
-      });
-    }
-
-    const grupos = agruparTramosConAviso(segmentos);
-    tramosConflictivos = grupos.filter(g => g.nivel !== 'verde');
-
-    tramosConflictivos.forEach((grupo, idx) => {
-      const puntoCentral = grupo.puntos[Math.floor(grupo.puntos.length / 2)] || grupo.puntos[0];
-      const htmlAvisos = crearHtmlAvisos(grupo.avisos);
-
-      L.marker([puntoCentral.lat, puntoCentral.lon])
-        .addTo(avisoPinsLayer)
-        .bindPopup(`
-          <div style="min-width:240px;">
-            <strong>Tramo conflictivo ${idx + 1}</strong><br>
-            <div style="margin:6px 0 8px 0;">${pillTramo(grupo.nivel)}</div>
-            <div><strong>Referencia:</strong> ${puntoCentral.nombre || 'Punto de la ruta'}</div>
-            <div style="margin-top:8px;">${htmlAvisos}</div>
-          </div>
-        `);
-    });
-
-    pintarPanelTramosConflictivos();
-  }
-
-  function pintarPanelTramosConflictivos() {
-    const cont = document.getElementById('tramosConflictivos');
-
-    if (!tramosConflictivos.length) {
-      cont.innerHTML = 'No se detectan tramos conflictivos en la ruta.';
-      return;
-    }
-
-    cont.innerHTML = tramosConflictivos.map((tramo, idx) => {
-      const puntoCentral = tramo.puntos[Math.floor(tramo.puntos.length / 2)] || tramo.puntos[0];
-      const avisoPrincipal = tramo.avisos[0] || {};
-      return `
-        <div class="tramo-item" onclick="zoomATramo(${idx})">
-          <div><strong>Tramo ${idx + 1}</strong></div>
-          ${pillTramo(tramo.nivel)}
-          <div><strong>Zona:</strong> ${avisoPrincipal.areaDesc || puntoCentral.nombre || 'Ruta'}</div>
-          <div><strong>Fenómeno:</strong> ${avisoPrincipal.event || 'Aviso meteorológico'}</div>
-        </div>
-      `;
-    }).join('');
-  }
-
-  function pintarPanelRiesgoPro(puntos) {
-    const cont = document.getElementById('tramosRiesgoPro');
-
-    if (!Array.isArray(puntos) || !puntos.length) {
-      cont.innerHTML = 'No se detectan tramos de riesgo.';
-      return;
-    }
-
-    cont.innerHTML = puntos.map((p, idx) => `
-      <div class="tramo-item" onclick="zoomARiesgoPro(${idx})">
-        <div><strong>Punto ${idx + 1}</strong> - ${p.nombre || 'Ruta'}</div>
-        ${pillRiesgo(p.nivelRiesgo)}
-        <div><strong>Hora:</strong> ${formatDateTimeEs(p.horaPaso)}</div>
-        <div><strong>Estado:</strong> ${p.estado || 'Sin dato'}</div>
-        <div><strong>Prob. lluvia:</strong> ${p.probLluvia ?? '—'}%</div>
-        <div><strong>Riesgo:</strong> ${p.riesgo ?? 0}/100</div>
-      </div>
-    `).join('');
-  }
-
-  function pintarPinsRiesgoPro(puntos) {
-    if (riesgoProPinsLayer) {
-      map.removeLayer(riesgoProPinsLayer);
-    }
-
-    riesgoProPinsLayer = L.layerGroup();
-
-    puntos.forEach((p, idx) => {
-      const marker = L.circleMarker([p.lat, p.lon], {
-        radius: 8,
-        color: colorRiesgoHex(p.colorRiesgo),
-        fillColor: colorRiesgoHex(p.colorRiesgo),
-        fillOpacity: 0.7,
-        weight: 2
-      }).bindPopup(`
-        <strong>Punto ${idx + 1}: ${p.nombre || 'Ruta'}</strong><br>
-        ${pillRiesgo(p.nivelRiesgo)}<br>
-        <strong>Hora:</strong> ${formatDateTimeEs(p.horaPaso)}<br>
-        <strong>Estado:</strong> ${p.estado || 'Sin dato'}<br>
-        <strong>Temperatura:</strong> ${p.temperatura ?? '—'}°C<br>
-        <strong>Prob. lluvia:</strong> ${p.probLluvia ?? '—'}%<br>
-        <strong>Precipitación:</strong> ${p.precipitacion ?? '—'} mm<br>
-        <strong>Viento:</strong> ${p.viento ?? '—'} km/h<br>
-        <strong>Riesgo:</strong> ${p.riesgo ?? 0}/100
-      `);
-
-      riesgoProPinsLayer.addLayer(marker);
-    });
-
-    riesgoProPinsLayer.addTo(map);
-  }
-
-  function pintarRutaRiesgoPro(puntos) {
-    if (riesgoProRouteLayer) {
-      map.removeLayer(riesgoProRouteLayer);
-      riesgoProRouteLayer = null;
-    }
-
-    if (!Array.isArray(puntos) || puntos.length < 2) {
-      return;
-    }
-
-    riesgoProRouteLayer = L.layerGroup();
-
-    for (let i = 0; i < puntos.length - 1; i++) {
-      const actual = puntos[i];
-      const siguiente = puntos[i + 1];
-
-      if (
-        typeof actual.lat !== 'number' ||
-        typeof actual.lon !== 'number' ||
-        typeof siguiente.lat !== 'number' ||
-        typeof siguiente.lon !== 'number'
-      ) {
-        continue;
-      }
-
-      const color = colorRiesgoHex(actual.colorRiesgo || 'verde');
-
-      L.polyline(
-        [
-          [actual.lat, actual.lon],
-          [siguiente.lat, siguiente.lon]
-        ],
-        {
-          color,
-          weight: 7,
-          opacity: 0.9
-        }
-      ).bindPopup(`
-        <strong>Tramo ${i + 1}</strong><br>
-        ${pillRiesgo(actual.nivelRiesgo || 'bajo')}<br>
-        <strong>Desde:</strong> ${actual.nombre || 'Punto de ruta'}<br>
-        <strong>Hora:</strong> ${formatDateTimeEs(actual.horaPaso)}<br>
-        <strong>Estado:</strong> ${actual.estado || 'Sin dato'}<br>
-        <strong>Prob. lluvia:</strong> ${actual.probLluvia ?? '—'}%<br>
-        <strong>Riesgo:</strong> ${actual.riesgo ?? 0}/100
-      `).addTo(riesgoProRouteLayer);
-    }
-
-    riesgoProRouteLayer.addTo(map);
-  }
-
-  function generarAlertasPro(analysis, bestDeparture = null) {
-    const alertas = [];
-    const puntos = Array.isArray(analysis?.puntos) ? analysis.puntos : [];
-    const riesgoGlobal = Number(analysis?.riesgoGlobal ?? 0);
-
-    if (riesgoGlobal >= 70) {
-      alertas.push({
-        nivel: 'alta',
-        titulo: 'No recomendable salir ahora',
-        texto: `La ruta presenta un riesgo global de ${riesgoGlobal}/100. Conviene retrasar la salida o revisar una alternativa.`
-      });
-    } else if (riesgoGlobal >= 40) {
-      alertas.push({
-        nivel: 'media',
-        titulo: 'Precaución en ruta',
-        texto: `La ruta presenta un riesgo global de ${riesgoGlobal}/100. Conviene circular con margen y vigilar los tramos señalados.`
-      });
-    } else {
-      alertas.push({
-        nivel: 'baja',
-        titulo: 'Condiciones razonables para viajar',
-        texto: `La ruta presenta un riesgo global de ${riesgoGlobal}/100. Aun así, revisa radar y avisos antes de salir.`
-      });
-    }
-
-    const peor = analysis?.peorTramo;
-    if (peor && Number(peor.riesgo ?? 0) >= 60) {
-      alertas.push({
-        nivel: 'alta',
-        titulo: 'Tramo especialmente comprometido',
-        texto: `${peor.nombre || 'Un punto de la ruta'} concentra el peor riesgo (${peor.riesgo}/100) alrededor de las ${formatHourOnly(peor.horaPaso)}.`
-      });
-    }
-
-    puntos.forEach(p => {
-      const estado = normalizeText(p.estado || '');
-      const prob = Number(p.probLluvia ?? 0);
-      const precip = Number(p.precipitacion ?? 0);
-      const viento = Number(p.viento ?? 0);
-
-      if (estado.includes('tormenta')) {
+      const peor = analysis?.peorTramo;
+      if (peor && Number(peor.riesgo ?? 0) >= 60) {
         alertas.push({
           nivel: 'alta',
-          titulo: 'Tormenta prevista en ruta',
-          texto: `${p.nombre || 'Un punto de la ruta'} puede verse afectado por tormenta hacia las ${formatHourOnly(p.horaPaso)}.`
+          titulo: 'Tramo especialmente comprometido',
+          texto: `${peor.nombre || 'Un punto de la ruta'} concentra el peor riesgo (${peor.riesgo}/100) alrededor de las ${formatHourOnly(peor.horaPaso)}.`
         });
       }
 
-      if (precip >= 4) {
-        alertas.push({
-          nivel: 'alta',
-          titulo: 'Lluvia intensa',
-          texto: `${p.nombre || 'Un punto de la ruta'} presenta precipitación estimada de ${precip} mm hacia las ${formatHourOnly(p.horaPaso)}.`
-        });
-      } else if (prob >= 80) {
-        alertas.push({
-          nivel: 'media',
-          titulo: 'Alta probabilidad de lluvia',
-          texto: `${p.nombre || 'Un punto de la ruta'} tiene una probabilidad de precipitación del ${prob}% hacia las ${formatHourOnly(p.horaPaso)}.`
-        });
-      }
-
-      if (viento >= 50) {
-        alertas.push({
-          nivel: 'media',
-          titulo: 'Viento fuerte',
-          texto: `${p.nombre || 'Un punto de la ruta'} puede registrar viento de ${viento} km/h.`
-        });
-      }
-
-      if (p.aviso && p.aviso.nivel) {
-        alertas.push({
-          nivel: p.aviso.nivel === 'rojo' ? 'alta' : 'media',
-          titulo: `Aviso oficial ${p.aviso.nivel}`,
-          texto: `${p.nombre || 'Un punto de la ruta'} está afectado por aviso oficial ${p.aviso.nivel}.`
-        });
-      }
-    });
-
-    if (bestDeparture?.mejor && analysis?.salida) {
-      const actualRisk = Number(analysis.riesgoGlobal ?? 0);
-      const bestRisk = Number(bestDeparture.mejor.riesgoGlobal ?? 0);
-
-      if (bestRisk + 10 < actualRisk) {
-        alertas.push({
-          nivel: 'media',
-          titulo: 'Conviene cambiar la hora de salida',
-          texto: `Salir a las ${formatHourOnly(bestDeparture.mejor.salida)} reduce el riesgo de ${actualRisk}/100 a ${bestRisk}/100.`
-        });
-      }
-    }
-
-    const dedup = new Map();
-    alertas.forEach(a => {
-      const key = `${a.nivel}|${a.titulo}|${a.texto}`;
-      if (!dedup.has(key)) dedup.set(key, a);
-    });
-
-    return Array.from(dedup.values()).slice(0, 8);
-  }
-
-  function pintarAlertasPro(alertas) {
-    const cont = document.getElementById('alertasPro');
-
-    if (!Array.isArray(alertas) || !alertas.length) {
-      cont.innerHTML = 'No se han generado alertas adicionales.';
-      return;
-    }
-
-    cont.innerHTML = alertas.map(a => `
-      <div class="alerta-pro ${a.nivel}">
-        <div class="alerta-pro-titulo">${a.titulo}</div>
-        <div>${a.texto}</div>
-      </div>
-    `).join('');
-  }
-
-  function construirHtmlRutaInteligente(data) {
-    if (!data || !data.smart) {
-      return 'No se pudo analizar la ruta inteligente.';
-    }
-
-    const s = data.smart;
-
-    return `
-      <div class="pro-card">
-        <div class="pro-title">Decisión automática</div>
-        <div class="pro-line"><strong>Decisión:</strong> ${String(s.decision || '').toUpperCase()}</div>
-        <div class="pro-line"><strong>Recomendación:</strong> ${s.recomendacion || 'No disponible'}</div>
-        <div class="pro-line"><strong>Motivo:</strong> ${s.motivo || 'No disponible'}</div>
-        <div class="pro-line"><strong>Acción:</strong> ${s.accion || 'No disponible'}</div>
-
-        ${data.mejorSalida ? `
-          <div class="pro-list-item">
-            <strong>Mejor hora alternativa:</strong><br>
-            ${formatDateTimeEs(data.mejorSalida.salida)}<br>
-            Riesgo: ${data.mejorSalida.riesgoGlobal}/100
-          </div>
-        ` : ''}
-
-        ${Array.isArray(data.tramosCriticos) && data.tramosCriticos.length ? `
-          <div class="pro-list-item">
-            <strong>Tramos críticos:</strong>
-            ${data.tramosCriticos.map(t => `
-              <div style="margin-top:6px;">
-                ${t.nombre || 'Ruta'}<br>
-                Riesgo: ${t.riesgo}/100<br>
-                Hora: ${formatDateTimeEs(t.horaPaso)}
-              </div>
-            `).join('')}
-          </div>
-        ` : ''}
-      </div>
-    `;
-  }
-
-  function construirHtmlResultadoPro(data) {
-    if (!data || data.error) {
-      return 'No se pudo calcular MeteoRuta Pro.';
-    }
-
-    const peor = data.peorTramo;
-    let recomendacion = '';
-    let color = '';
-
-    if ((data.riesgoGlobal ?? 0) >= 70) {
-      recomendacion = 'No recomendable salir';
-      color = '#dc2626';
-    } else if ((data.riesgoGlobal ?? 0) >= 40) {
-      recomendacion = 'Precaución en ruta';
-      color = '#f97316';
-    } else {
-      recomendacion = 'Buen momento para viajar';
-      color = '#16a34a';
-    }
-
-    return `
-      <div class="pro-card">
-        <div class="pro-title">Resumen de riesgo</div>
-        <div class="pro-line">
-          <strong>Recomendación:</strong>
-          <span style="color:${color}; font-weight:bold;">${recomendacion}</span>
-        </div>
-        <div class="pro-line"><strong>Riesgo global:</strong> ${data.riesgoGlobal ?? 0}/100</div>
-        <div class="pro-line"><strong>Nivel global:</strong> ${data.nivelGlobal || 'No disponible'}</div>
-        <div class="pro-line"><strong>Resumen:</strong> ${data.resumen || 'Sin resumen'}</div>
-
-        ${peor ? `
-          <div class="pro-list-item">
-            <div><strong>Peor tramo:</strong> ${peor.nombre || 'Ruta'}</div>
-            <div><strong>Hora:</strong> ${formatDateTimeEs(peor.horaPaso)}</div>
-            <div><strong>Riesgo:</strong> ${peor.riesgo ?? 0}/100</div>
-            <div><strong>Estado:</strong> ${peor.estado || 'Sin dato'}</div>
-            <div><strong>Prob. lluvia:</strong> ${peor.probLluvia ?? '—'}%</div>
-          </div>
-        ` : ''}
-      </div>
-    `;
-  }
-
-  function construirHtmlMejorSalida(data) {
-    if (!data || data.error || !data.mejor) {
-      return 'No se pudo calcular la mejor hora de salida.';
-    }
-
-    return `
-      <div class="pro-card">
-        <div class="pro-title">Mejor hora de salida</div>
-        <div class="pro-line"><strong>Mejor salida:</strong> ${formatDateTimeEs(data.mejor.salida)}</div>
-        <div class="pro-line"><strong>Riesgo:</strong> ${data.mejor.riesgoGlobal ?? 0}/100</div>
-        <div class="pro-line"><strong>Nivel:</strong> ${data.mejor.nivelGlobal || 'No disponible'}</div>
-        <div class="pro-line"><strong>Resumen:</strong> ${data.resumen || 'Sin resumen'}</div>
-        ${Array.isArray(data.alternativas) && data.alternativas.length ? `
-          <div class="pro-list-item">
-            <strong>Alternativas:</strong>
-            ${data.alternativas.map(item => `
-              <div style="margin-top:6px;">
-                ${formatDateTimeEs(item.salida)} — riesgo ${item.riesgoGlobal}/100 (${item.nivelGlobal})
-              </div>
-            `).join('')}
-          </div>
-        ` : ''}
-      </div>
-    `;
-  }
-
-  function pintarForecastCompacto(p) {
-    return `
-      <div class="forecast-card">
-        <div class="forecast-title">${p.nombre || 'Ruta'}</div>
-        <div class="compact-line">Hora: ${formatDateTimeEs(p.horaPaso)}</div>
-        <div class="compact-line">Estado: ${p.estado || 'Sin dato'}</div>
-        <div class="compact-line">Temperatura: ${p.temperatura ?? '—'}°C | Prob. lluvia: ${p.probLluvia ?? '—'}% | Viento: ${p.viento ?? '—'} km/h</div>
-        <div class="compact-line">Precipitación: ${p.precipitacion ?? '—'} mm</div>
-      </div>
-    `;
-  }
-
-  function zoomATramo(index) {
-    const tramo = tramosConflictivos[index];
-    if (!tramo || !tramo.routeCoords || tramo.routeCoords.length < 2) return;
-
-    const bounds = L.latLngBounds(tramo.routeCoords);
-    map.fitBounds(bounds, { padding: [30, 30] });
-  }
-
-  function zoomARiesgoPro(index) {
-    if (!currentRoutePoints || !currentRoutePoints[index]) return;
-    const p = currentRoutePoints[index];
-    map.setView([p.lat, p.lon], 10);
-  }
-
-  function actualizarEstadoRuta(avisoGlobal, provinciasRuta, fechaLlegada = null) {
-    const provinciasTexto = provinciasRuta.length ? provinciasRuta.join(', ') : 'No detectadas';
-    const lluviaTexto = document.getElementById('lluviaRutaEstado').textContent || 'No analizada';
-
-    const textoRiesgo =
-      avisoGlobal === 'rojo' ? 'Rojo' :
-      avisoGlobal === 'naranja' ? 'Naranja' :
-      avisoGlobal === 'amarillo' ? 'Amarillo' : 'Sin avisos relevantes';
-
-    document.getElementById('estadoRuta').innerHTML = `
-      <strong>Riesgo máximo:</strong> ${textoRiesgo}<br>
-      <strong>Tramos conflictivos:</strong> ${tramosConflictivos.length}<br>
-      <strong>Provincias:</strong> ${provinciasTexto}<br>
-      <strong>Lluvia en ruta:</strong> ${lluviaTexto}<br>
-      <strong>Llegada estimada:</strong> ${fechaLlegada ? fechaLlegada.toLocaleString('es-ES') : 'No disponible'}
-    `;
-  }
-
-  async function cargarRadar() {
-    try {
-      document.getElementById('radarEstado').textContent = 'Cargando radar...';
-
-      const res = await fetch('https://api.rainviewer.com/public/weather-maps.json');
-      const data = await res.json();
-
-      radarHost = data.host || 'https://tilecache.rainviewer.com';
-      radarFrames = data?.radar?.past || [];
-
-      if (!radarFrames.length) {
-        document.getElementById('radarEstado').textContent = 'No hay frames de radar disponibles.';
-        return;
-      }
-
-      radarFrameIndex = radarFrames.length - 1;
-      renderRadarFrame(radarFrameIndex, false);
-    } catch (e) {
-      console.error(e);
-      document.getElementById('radarEstado').textContent = 'No se pudo cargar el radar.';
-    }
-  }
-
-  function renderRadarFrame(index, preservingMessage = true) {
-    if (!radarFrames.length) return;
-
-    const frame = radarFrames[index];
-    const tileUrl = radarHost + frame.path + '/256/{z}/{x}/{y}/2/1_1.png';
-
-    if (radarLayer) {
-      map.removeLayer(radarLayer);
-    }
-
-    radarLayer = L.tileLayer(tileUrl, {
-      tileSize: 256,
-      opacity: radarOpacity,
-      zIndex: 500
-    });
-
-    if (radarVisible) {
-      radarLayer.addTo(map);
-    }
-
-    const fechaFrame = new Date((frame.time || 0) * 1000);
-    let texto = 'Radar cargado. Frame: ' + fechaFrame.toLocaleString('es-ES');
-
-    if (radarAnimationInterval) {
-      texto += ' | Animación activa';
-    } else if (preservingMessage) {
-      texto += ' | Animación parada';
-    }
-
-    texto += ' | Opacidad: ' + radarOpacity;
-    texto += radarVisible ? ' | Radar visible' : ' | Radar oculto';
-
-    document.getElementById('radarEstado').textContent = texto;
-  }
-
-  function toggleRadar() {
-    radarVisible = !radarVisible;
-
-    if (!radarLayer) return;
-
-    if (radarVisible) {
-      radarLayer.addTo(map);
-    } else {
-      map.removeLayer(radarLayer);
-    }
-
-    renderRadarFrame(radarFrameIndex);
-  }
-
-  function ajustarOpacidadRadar() {
-    if (!radarLayer) return;
-
-    if (radarOpacity === 0.45) radarOpacity = 0.65;
-    else if (radarOpacity === 0.65) radarOpacity = 0.30;
-    else radarOpacity = 0.45;
-
-    radarLayer.setOpacity(radarOpacity);
-    renderRadarFrame(radarFrameIndex);
-  }
-
-  function toggleAnimacionRadar() {
-    if (!radarFrames.length) {
-      document.getElementById('radarEstado').textContent = 'Primero carga el radar.';
-      return;
-    }
-
-    if (radarAnimationInterval) {
-      clearInterval(radarAnimationInterval);
-      radarAnimationInterval = null;
-      renderRadarFrame(radarFrameIndex);
-      return;
-    }
-
-    radarAnimationInterval = setInterval(() => {
-      radarFrameIndex = (radarFrameIndex + 1) % radarFrames.length;
-      renderRadarFrame(radarFrameIndex, false);
-    }, 700);
-
-    renderRadarFrame(radarFrameIndex, false);
-  }
-
-  function sampleRoutePoints(coords, everyNPoints = 20) {
-    const sampled = [];
-
-    for (let i = 0; i < coords.length; i += everyNPoints) {
-      sampled.push(coords[i]);
-    }
-
-    if (coords.length > 0) {
-      const last = coords[coords.length - 1];
-      const alreadyIncluded =
-        sampled.length > 0 &&
-        sampled[sampled.length - 1][0] === last[0] &&
-        sampled[sampled.length - 1][1] === last[1];
-
-      if (!alreadyIncluded) {
-        sampled.push(last);
-      }
-    }
-
-    return sampled;
-  }
-
-  async function getRainForPoint(lat, lon) {
-    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=precipitation,rain,showers&forecast_days=1`;
-
-    const res = await fetch(url);
-    if (!res.ok) {
-      throw new Error('Error consultando lluvia para el punto');
-    }
-
-    const data = await res.json();
-
-    return {
-      precipitation: data.current?.precipitation ?? 0,
-      rain: data.current?.rain ?? 0,
-      showers: data.current?.showers ?? 0
-    };
-  }
-
-  function colorLluvia(precipitation) {
-    if (precipitation >= 4) return 'red';
-    if (precipitation >= 2) return 'orange';
-    if (precipitation > 0) return '#2563eb';
-    return 'green';
-  }
-
-  function drawRainPoints(points) {
-    if (rainPointsLayer) {
-      map.removeLayer(rainPointsLayer);
-    }
-
-    rainPointsLayer = L.layerGroup();
-
-    points.forEach(point => {
-      if (point.precipitation > 0) {
-        let radius = 6;
-        if (point.precipitation >= 4) radius = 11;
-        else if (point.precipitation >= 2) radius = 9;
-        else if (point.precipitation >= 1) radius = 7;
-
-        const marker = L.circleMarker([point.lat, point.lon], {
-          radius,
-          color: colorLluvia(point.precipitation),
-          fillColor: colorLluvia(point.precipitation),
-          fillOpacity: 0.55,
-          weight: 1
-        }).bindPopup(`
-          <strong>Lluvia detectada</strong><br>
-          Lat: ${point.lat.toFixed(4)}<br>
-          Lon: ${point.lon.toFixed(4)}<br>
-          Precipitación: ${point.precipitation} mm<br>
-          Lluvia: ${point.rain} mm<br>
-          Chubascos: ${point.showers} mm
-        `);
-
-        rainPointsLayer.addLayer(marker);
-      }
-    });
-
-    rainPointsLayer.addTo(map);
-  }
-
-  function limpiarAnalisisLluvia() {
-    if (rainPointsLayer) {
-      map.removeLayer(rainPointsLayer);
-      rainPointsLayer = null;
-    }
-    document.getElementById('lluviaRutaEstado').textContent = 'Análisis de lluvia limpiado.';
-  }
-
-  async function analizarLluviaRuta() {
-    try {
-      if (!currentRouteCoords || currentRouteCoords.length === 0) {
-        alert('Primero calcula una ruta');
-        return;
-      }
-
-      document.getElementById('lluviaRutaEstado').textContent = 'Analizando lluvia sobre la ruta...';
-
-      const sampledPoints = sampleRoutePoints(currentRouteCoords, 20);
-      const results = [];
-
-      for (const coord of sampledPoints) {
-        const [lon, lat] = coord;
-
-        try {
-          const rainData = await getRainForPoint(lat, lon);
-
-          results.push({
-            lat,
-            lon,
-            precipitation: rainData.precipitation,
-            rain: rainData.rain,
-            showers: rainData.showers
+      puntos.forEach(p => {
+        const estado = normalizeText(p.estado || '');
+        const prob = Number(p.probLluvia ?? 0);
+        const precip = Number(p.precipitacion ?? 0);
+        const viento = Number(p.viento ?? 0);
+
+        if (estado.includes('tormenta')) {
+          alertas.push({
+            nivel: 'alta',
+            titulo: 'Tormenta prevista en ruta',
+            texto: `${p.nombre || 'Un punto de la ruta'} puede verse afectado por tormenta hacia las ${formatHourOnly(p.horaPaso)}.`
           });
-        } catch (error) {
-          console.error('Error consultando punto de lluvia:', lat, lon, error);
+        }
+
+        if (precip >= 4) {
+          alertas.push({
+            nivel: 'alta',
+            titulo: 'Lluvia intensa',
+            texto: `${p.nombre || 'Un punto de la ruta'} presenta precipitación estimada de ${precip} mm hacia las ${formatHourOnly(p.horaPaso)}.`
+          });
+        } else if (prob >= 80) {
+          alertas.push({
+            nivel: 'media',
+            titulo: 'Alta probabilidad de lluvia',
+            texto: `${p.nombre || 'Un punto de la ruta'} tiene una probabilidad de precipitación del ${prob}% hacia las ${formatHourOnly(p.horaPaso)}.`
+          });
+        }
+
+        if (viento >= 50) {
+          alertas.push({
+            nivel: 'media',
+            titulo: 'Viento fuerte',
+            texto: `${p.nombre || 'Un punto de la ruta'} puede registrar viento de ${viento} km/h.`
+          });
+        }
+
+        if (p.aviso && p.aviso.nivel) {
+          alertas.push({
+            nivel: p.aviso.nivel === 'rojo' ? 'alta' : 'media',
+            titulo: `Aviso oficial ${p.aviso.nivel}`,
+            texto: `${p.nombre || 'Un punto de la ruta'} está afectado por aviso oficial ${p.aviso.nivel}.`
+          });
+        }
+      });
+
+      if (bestDeparture?.mejor && analysis?.salida) {
+        const actualRisk = Number(analysis.riesgoGlobal ?? 0);
+        const bestRisk = Number(bestDeparture.mejor.riesgoGlobal ?? 0);
+
+        if (bestRisk + 10 < actualRisk) {
+          alertas.push({
+            nivel: 'media',
+            titulo: 'Conviene cambiar la hora de salida',
+            texto: `Salir a las ${formatHourOnly(bestDeparture.mejor.salida)} reduce el riesgo de ${actualRisk}/100 a ${bestRisk}/100.`
+          });
         }
       }
 
-      drawRainPoints(results);
+      const dedup = new Map();
+      alertas.forEach(a => {
+        const key = `${a.nivel}|${a.titulo}|${a.texto}`;
+        if (!dedup.has(key)) dedup.set(key, a);
+      });
 
-      const rainyPoints = results.filter(p => p.precipitation > 0);
-      const strongPoints = results.filter(p => p.precipitation >= 2);
+      return Array.from(dedup.values()).slice(0, 8);
+    }
 
-      if (rainyPoints.length === 0) {
-        document.getElementById('lluviaRutaEstado').textContent =
-          'No se detecta lluvia en los puntos analizados de la ruta.';
+    function pintarAlertasPro(alertas) {
+      const cont = document.getElementById('alertasPro');
+
+      if (!Array.isArray(alertas) || !alertas.length) {
+        cont.innerHTML = 'No se han generado alertas adicionales.';
+        return;
+      }
+
+      cont.innerHTML = alertas.map(a => `
+        <div class="alerta-pro ${a.nivel}">
+          <div class="alerta-pro-titulo">${a.titulo}</div>
+          <div>${a.texto}</div>
+        </div>
+      `).join('');
+    }
+
+    function construirHtmlRutaInteligente(data) {
+      if (!data || !data.smart) {
+        return 'No se pudo analizar la ruta inteligente.';
+      }
+
+      const s = data.smart;
+
+      return `
+        <div class="pro-card">
+          <div class="pro-title">Decisión automática</div>
+          <div class="pro-line"><strong>Decisión:</strong> ${String(s.decision || '').toUpperCase()}</div>
+          <div class="pro-line"><strong>Recomendación:</strong> ${s.recomendacion || 'No disponible'}</div>
+          <div class="pro-line"><strong>Motivo:</strong> ${s.motivo || 'No disponible'}</div>
+          <div class="pro-line"><strong>Acción:</strong> ${s.accion || 'No disponible'}</div>
+
+          ${data.mejorSalida ? `
+            <div class="pro-list-item">
+              <strong>Mejor hora alternativa:</strong><br>
+              ${formatDateTimeEs(data.mejorSalida.salida)}<br>
+              Riesgo: ${data.mejorSalida.riesgoGlobal}/100
+            </div>
+          ` : ''}
+
+          ${Array.isArray(data.tramosCriticos) && data.tramosCriticos.length ? `
+            <div class="pro-list-item">
+              <strong>Tramos críticos:</strong>
+              ${data.tramosCriticos.map(t => `
+                <div style="margin-top:6px;">
+                  ${t.nombre || 'Ruta'}<br>
+                  Riesgo: ${t.riesgo}/100<br>
+                  Hora: ${formatDateTimeEs(t.horaPaso)}
+                </div>
+              `).join('')}
+            </div>
+          ` : ''}
+        </div>
+      `;
+    }
+
+    function construirHtmlResultadoPro(data) {
+      if (!data || data.error) {
+        return 'No se pudo calcular MeteoRuta Pro.';
+      }
+
+      const peor = data.peorTramo;
+      let recomendacion = '';
+      let color = '';
+
+      if ((data.riesgoGlobal ?? 0) >= 70) {
+        recomendacion = 'No recomendable salir';
+        color = '#dc2626';
+      } else if ((data.riesgoGlobal ?? 0) >= 40) {
+        recomendacion = 'Precaución en ruta';
+        color = '#f97316';
       } else {
-        document.getElementById('lluviaRutaEstado').textContent =
-          'Lluvia detectada en ' + rainyPoints.length +
-          ' puntos. Lluvia moderada/fuerte: ' + strongPoints.length + '.';
+        recomendacion = 'Buen momento para viajar';
+        color = '#16a34a';
       }
 
-      const nivelHtml = document.getElementById('nivelAviso').innerText.toLowerCase();
-      let avisoGlobal = 'verde';
-      if (nivelHtml.includes('rojo')) avisoGlobal = 'rojo';
-      else if (nivelHtml.includes('naranja')) avisoGlobal = 'naranja';
-      else if (nivelHtml.includes('amarillo')) avisoGlobal = 'amarillo';
+      return `
+        <div class="pro-card">
+          <div class="pro-title">Resumen de riesgo</div>
+          <div class="pro-line">
+            <strong>Recomendación:</strong>
+            <span style="color:${color}; font-weight:bold;">${recomendacion}</span>
+          </div>
+          <div class="pro-line"><strong>Riesgo global:</strong> ${data.riesgoGlobal ?? 0}/100</div>
+          <div class="pro-line"><strong>Nivel global:</strong> ${data.nivelGlobal || 'No disponible'}</div>
+          <div class="pro-line"><strong>Resumen:</strong> ${data.resumen || 'Sin resumen'}</div>
 
-      const provinciasTexto = document.getElementById('provinciasRuta').innerText;
-      const provinciasRuta = provinciasTexto === 'No detectadas' ? [] : provinciasTexto.split(',').map(x => x.trim());
-      const fechaLlegada = currentFechaSalida && currentRouteDurationSec
-        ? new Date(currentFechaSalida.getTime() + currentRouteDurationSec * 1000)
-        : null;
-
-      actualizarEstadoRuta(avisoGlobal, provinciasRuta, fechaLlegada);
-
-    } catch (e) {
-      console.error(e);
-      document.getElementById('lluviaRutaEstado').textContent = 'No se pudo analizar la lluvia en la ruta.';
-    }
-  }
-
-  function pintarTrayectoHorario(puntos) {
-    const cont = document.getElementById('meteoTrayecto');
-
-    if (!Array.isArray(puntos) || !puntos.length) {
-      cont.innerHTML = 'Sin previsión horaria de trayecto.';
-      return;
+          ${peor ? `
+            <div class="pro-list-item">
+              <div><strong>Peor tramo:</strong> ${peor.nombre || 'Ruta'}</div>
+              <div><strong>Hora:</strong> ${formatDateTimeEs(peor.horaPaso)}</div>
+              <div><strong>Riesgo:</strong> ${peor.riesgo ?? 0}/100</div>
+              <div><strong>Estado:</strong> ${peor.estado || 'Sin dato'}</div>
+              <div><strong>Prob. lluvia:</strong> ${peor.probLluvia ?? '—'}%</div>
+            </div>
+          ` : ''}
+        </div>
+      `;
     }
 
-    cont.innerHTML = puntos.map(p => pintarForecastCompacto(p)).join('');
-  }
+    function construirHtmlMejorSalida(data) {
+      if (!data || data.error || !data.mejor) {
+        return 'No se pudo calcular la mejor hora de salida.';
+      }
 
-  function pintarLlegadaDestino(llegada) {
-    const cont = document.getElementById('meteoLlegada');
-
-    if (!llegada) {
-      cont.innerHTML = 'Sin previsión de llegada.';
-      return;
+      return `
+        <div class="pro-card">
+          <div class="pro-title">Mejor hora de salida</div>
+          <div class="pro-line"><strong>Mejor salida:</strong> ${formatDateTimeEs(data.mejor.salida)}</div>
+          <div class="pro-line"><strong>Riesgo:</strong> ${data.mejor.riesgoGlobal ?? 0}/100</div>
+          <div class="pro-line"><strong>Nivel:</strong> ${data.mejor.nivelGlobal || 'No disponible'}</div>
+          <div class="pro-line"><strong>Resumen:</strong> ${data.resumen || 'Sin resumen'}</div>
+          ${Array.isArray(data.alternativas) && data.alternativas.length ? `
+            <div class="pro-list-item">
+              <strong>Alternativas:</strong>
+              ${data.alternativas.map(item => `
+                <div style="margin-top:6px;">
+                  ${formatDateTimeEs(item.salida)} — riesgo ${item.riesgoGlobal}/100 (${item.nivelGlobal})
+                </div>
+              `).join('')}
+            </div>
+          ` : ''}
+        </div>
+      `;
     }
 
-    cont.innerHTML = `
-      <div class="forecast-card">
-        <div class="forecast-title">Condiciones a la llegada</div>
-        <div class="compact-line">Hora: ${formatDateTimeEs(llegada.hora)}</div>
-        <div class="compact-line">Estado: ${llegada.estado || 'Sin dato'}</div>
-        <div class="compact-line">Temperatura: ${llegada.temperatura ?? '—'}°C | Prob. lluvia: ${llegada.probLluvia ?? '—'}% | Viento: ${llegada.viento ?? '—'} km/h</div>
-        <div class="compact-line">Precipitación: ${llegada.precipitacion ?? '—'} mm</div>
-      </div>
-    `;
-  }
-
-  function pintarDiasDestino(dias) {
-    const cont = document.getElementById('meteoDestinoDias');
-
-    if (!Array.isArray(dias) || !dias.length) {
-      cont.innerHTML = 'Sin previsión de días en destino.';
-      return;
+    function pintarForecastCompacto(p) {
+      return `
+        <div class="forecast-card">
+          <div class="forecast-title">${p.nombre || 'Ruta'}</div>
+          <div class="compact-line">Hora: ${formatDateTimeEs(p.horaPaso)}</div>
+          <div class="compact-line">Estado: ${p.estado || 'Sin dato'}</div>
+          <div class="compact-line">Temperatura: ${p.temperatura ?? '—'}°C | Prob. lluvia: ${p.probLluvia ?? '—'}% | Viento: ${p.viento ?? '—'} km/h</div>
+          <div class="compact-line">Precipitación: ${p.precipitacion ?? '—'} mm</div>
+        </div>
+      `;
     }
 
-    cont.innerHTML = dias.map(d => `
-      <div class="forecast-card">
-        <div class="forecast-title">${formatDateEs(d.fecha)}</div>
-        <div class="compact-line">Estado: ${d.estado || 'Sin dato'}</div>
-        <div class="compact-line">Máx ${d.tempMax ?? '—'}°C | Mín ${d.tempMin ?? '—'}°C</div>
-        <div class="compact-line">Prob. lluvia: ${d.probLluviaMax ?? '—'}% | Viento: ${d.vientoMax ?? '—'} km/h</div>
-      </div>
-    `).join('');
-  }
+    function zoomATramo(index) {
+      const tramo = tramosConflictivos[index];
+      if (!tramo || !tramo.routeCoords || tramo.routeCoords.length < 2) return;
 
-  async function analizarRiesgoRutaPro() {
-    try {
-      if (!currentRoutePoints || !currentRoutePoints.length) {
-        alert('Primero calcula una ruta');
+      const bounds = L.latLngBounds(tramo.routeCoords);
+      map.fitBounds(bounds, { padding: [30, 30] });
+    }
+
+    function zoomARiesgoPro(index) {
+      if (!currentRoutePoints || !currentRoutePoints[index]) return;
+      const p = currentRoutePoints[index];
+      map.setView([p.lat, p.lon], 10);
+    }
+
+    function actualizarEstadoRuta(avisoGlobal, provinciasRuta, fechaLlegada = null) {
+      const provinciasTexto = provinciasRuta.length ? provinciasRuta.join(', ') : 'No detectadas';
+      const lluviaTexto = document.getElementById('lluviaRutaEstado').textContent || 'No analizada';
+
+      const textoRiesgo =
+        avisoGlobal === 'rojo' ? 'Rojo' :
+        avisoGlobal === 'naranja' ? 'Naranja' :
+        avisoGlobal === 'amarillo' ? 'Amarillo' : 'Sin avisos relevantes';
+
+      document.getElementById('estadoRuta').innerHTML = `
+        <strong>Riesgo máximo:</strong> ${textoRiesgo}<br>
+        <strong>Tramos conflictivos:</strong> ${tramosConflictivos.length}<br>
+        <strong>Provincias:</strong> ${provinciasTexto}<br>
+        <strong>Lluvia en ruta:</strong> ${lluviaTexto}<br>
+        <strong>Llegada estimada:</strong> ${fechaLlegada ? fechaLlegada.toLocaleString('es-ES') : 'No disponible'}
+      `;
+    }
+
+    async function cargarRadar() {
+      try {
+        document.getElementById('radarEstado').textContent = 'Cargando radar...';
+
+        const res = await fetch('https://api.rainviewer.com/public/weather-maps.json');
+        const data = await res.json();
+
+        radarHost = data.host || 'https://tilecache.rainviewer.com';
+        radarFrames = data?.radar?.past || [];
+
+        if (!radarFrames.length) {
+          document.getElementById('radarEstado').textContent = 'No hay frames de radar disponibles.';
+          return;
+        }
+
+        radarFrameIndex = radarFrames.length - 1;
+        renderRadarFrame(radarFrameIndex, false);
+      } catch (e) {
+        console.error(e);
+        document.getElementById('radarEstado').textContent = 'No se pudo cargar el radar.';
+      }
+    }
+
+    function renderRadarFrame(index, preservingMessage = true) {
+      if (!radarFrames.length) return;
+
+      const frame = radarFrames[index];
+      const tileUrl = radarHost + frame.path + '/256/{z}/{x}/{y}/2/1_1.png';
+
+      if (radarLayer) {
+        map.removeLayer(radarLayer);
+      }
+
+      radarLayer = L.tileLayer(tileUrl, {
+        tileSize: 256,
+        opacity: radarOpacity,
+        zIndex: 500
+      });
+
+      if (radarVisible) {
+        radarLayer.addTo(map);
+      }
+
+      const fechaFrame = new Date((frame.time || 0) * 1000);
+      let texto = 'Radar cargado. Frame: ' + fechaFrame.toLocaleString('es-ES');
+
+      if (radarAnimationInterval) {
+        texto += ' | Animación activa';
+      } else if (preservingMessage) {
+        texto += ' | Animación parada';
+      }
+
+      texto += ' | Opacidad: ' + radarOpacity;
+      texto += radarVisible ? ' | Radar visible' : ' | Radar oculto';
+
+      document.getElementById('radarEstado').textContent = texto;
+    }
+
+    function toggleRadar() {
+      radarVisible = !radarVisible;
+
+      if (!radarLayer) return;
+
+      if (radarVisible) {
+        radarLayer.addTo(map);
+      } else {
+        map.removeLayer(radarLayer);
+      }
+
+      renderRadarFrame(radarFrameIndex);
+    }
+
+    function ajustarOpacidadRadar() {
+      if (!radarLayer) return;
+
+      if (radarOpacity === 0.45) radarOpacity = 0.65;
+      else if (radarOpacity === 0.65) radarOpacity = 0.30;
+      else radarOpacity = 0.45;
+
+      radarLayer.setOpacity(radarOpacity);
+      renderRadarFrame(radarFrameIndex);
+    }
+
+    function toggleAnimacionRadar() {
+      if (!radarFrames.length) {
+        document.getElementById('radarEstado').textContent = 'Primero carga el radar.';
         return;
       }
 
-      document.getElementById('meteorutaProResultado').innerHTML = 'Analizando riesgo de ruta...';
-      document.getElementById('tramosRiesgoPro').innerHTML = 'Calculando tramos de riesgo...';
-      document.getElementById('alertasPro').innerHTML = 'Calculando alertas pro...';
+      if (radarAnimationInterval) {
+        clearInterval(radarAnimationInterval);
+        radarAnimationInterval = null;
+        renderRadarFrame(radarFrameIndex);
+        return;
+      }
 
-      const res = await fetch('/api/route/analyze', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          puntos: currentRoutePoints,
-          fechaSalida: currentFechaSalida ? currentFechaSalida.toISOString() : new Date().toISOString(),
-          duracionSeg: currentRouteDurationSec || 0,
-          provincias: currentProvinciasRuta
-        })
-      });
+      radarAnimationInterval = setInterval(() => {
+        radarFrameIndex = (radarFrameIndex + 1) % radarFrames.length;
+        renderRadarFrame(radarFrameIndex, false);
+      }, 700);
+
+      renderRadarFrame(radarFrameIndex, false);
+    }
+
+    function sampleRoutePoints(coords, everyNPoints = 20) {
+      const sampled = [];
+
+      for (let i = 0; i < coords.length; i += everyNPoints) {
+        sampled.push(coords[i]);
+      }
+
+      if (coords.length > 0) {
+        const last = coords[coords.length - 1];
+        const alreadyIncluded =
+          sampled.length > 0 &&
+          sampled[sampled.length - 1][0] === last[0] &&
+          sampled[sampled.length - 1][1] === last[1];
+
+        if (!alreadyIncluded) {
+          sampled.push(last);
+        }
+      }
+
+      return sampled;
+    }
+
+    async function getRainForPoint(lat, lon) {
+      const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=precipitation,rain,showers&forecast_days=1`;
+
+      const res = await fetch(url);
+      if (!res.ok) {
+        throw new Error('Error consultando lluvia para el punto');
+      }
 
       const data = await res.json();
 
-      if (data.error) {
-        throw new Error(data.error);
-      }
-
-      lastRiskAnalysis = data;
-
-      document.getElementById('meteorutaProResultado').innerHTML = construirHtmlResultadoPro(data);
-      pintarPanelRiesgoPro(data.puntos || []);
-      pintarPinsRiesgoPro(data.puntos || []);
-      pintarRutaRiesgoPro(data.puntos || []);
-      pintarAlertasPro(generarAlertasPro(data, lastBestDeparture));
-
-    } catch (error) {
-      console.error(error);
-      document.getElementById('meteorutaProResultado').innerHTML = 'No se pudo analizar el riesgo de la ruta.';
-      document.getElementById('tramosRiesgoPro').innerHTML = 'No se pudieron calcular los tramos de riesgo.';
-      document.getElementById('alertasPro').innerHTML = 'No se pudieron calcular las alertas pro.';
+      return {
+        precipitation: data.current?.precipitation ?? 0,
+        rain: data.current?.rain ?? 0,
+        showers: data.current?.showers ?? 0
+      };
     }
-  }
 
-  async function calcularMejorSalidaPro() {
-    try {
-      if (!currentRoutePoints || !currentRoutePoints.length) {
-        alert('Primero calcula una ruta');
-        return;
+    function colorLluvia(precipitation) {
+      if (precipitation >= 4) return 'red';
+      if (precipitation >= 2) return 'orange';
+      if (precipitation > 0) return '#2563eb';
+      return 'green';
+    }
+
+    function drawRainPoints(points) {
+      if (rainPointsLayer) {
+        map.removeLayer(rainPointsLayer);
       }
 
-      document.getElementById('meteorutaProResultado').innerHTML = 'Calculando mejor hora de salida...';
+      rainPointsLayer = L.layerGroup();
 
-      const res = await fetch('/api/route/best-departure', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          puntos: currentRoutePoints,
-          fechaSalida: currentFechaSalida ? currentFechaSalida.toISOString() : new Date().toISOString(),
-          duracionSeg: currentRouteDurationSec || 0,
-          horasVentana: 6,
-          pasoMinutos: 30,
-          provincias: currentProvinciasRuta
-        })
+      points.forEach(point => {
+        if (point.precipitation > 0) {
+          let radius = 6;
+          if (point.precipitation >= 4) radius = 11;
+          else if (point.precipitation >= 2) radius = 9;
+          else if (point.precipitation >= 1) radius = 7;
+
+          const marker = L.circleMarker([point.lat, point.lon], {
+            radius,
+            color: colorLluvia(point.precipitation),
+            fillColor: colorLluvia(point.precipitation),
+            fillOpacity: 0.55,
+            weight: 1
+          }).bindPopup(`
+            <strong>Lluvia detectada</strong><br>
+            Lat: ${point.lat.toFixed(4)}<br>
+            Lon: ${point.lon.toFixed(4)}<br>
+            Precipitación: ${point.precipitation} mm<br>
+            Lluvia: ${point.rain} mm<br>
+            Chubascos: ${point.showers} mm
+          `);
+
+          rainPointsLayer.addLayer(marker);
+        }
       });
 
-      const data = await res.json();
-
-      if (data.error) {
-        throw new Error(data.error);
-      }
-
-      lastBestDeparture = data;
-      document.getElementById('meteorutaProResultado').innerHTML = construirHtmlMejorSalida(data);
-
-      if (lastRiskAnalysis) {
-        pintarAlertasPro(generarAlertasPro(lastRiskAnalysis, data));
-      }
-
-    } catch (error) {
-      console.error(error);
-      document.getElementById('meteorutaProResultado').innerHTML = 'No se pudo calcular la mejor hora de salida.';
-    }
-  }
-
-  async function calcularRutaInteligente() {
-    try {
-      if (!currentRoutePoints || !currentRoutePoints.length) {
-        alert('Primero calcula una ruta');
-        return;
-      }
-
-      document.getElementById('rutaInteligenteResultado').innerHTML = 'Analizando ruta inteligente...';
-
-      const res = await fetch('/api/route/intelligent', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          puntos: currentRoutePoints,
-          fechaSalida: currentFechaSalida
-            ? currentFechaSalida.toISOString()
-            : new Date().toISOString(),
-          duracionSeg: currentRouteDurationSec || 0,
-          horasVentana: 6,
-          pasoMinutos: 30,
-          provincias: currentProvinciasRuta
-        })
-      });
-
-      const data = await res.json();
-
-      if (data.error) {
-        throw new Error(data.error);
-      }
-
-      lastSmartRoute = data;
-      document.getElementById('rutaInteligenteResultado').innerHTML = construirHtmlRutaInteligente(data);
-
-    } catch (error) {
-      console.error(error);
-      document.getElementById('rutaInteligenteResultado').innerHTML = 'No se pudo calcular la ruta inteligente.';
-    }
-  }
-
-  async function cargarMeteoAvanzada(puntos, fechaSalida, duracionSeg, destino) {
-    const q = encodeURIComponent(JSON.stringify(puntos));
-    const fechaSalidaIso = encodeURIComponent(fechaSalida.toISOString());
-
-    const meteoRes = await fetch(
-      '/api/ruta-meteo?puntos=' + q +
-      '&fechaSalida=' + fechaSalidaIso +
-      '&duracionSeg=' + encodeURIComponent(duracionSeg)
-    );
-    const meteoData = await meteoRes.json();
-
-    if (meteoData.error) {
-      throw new Error(meteoData.error);
+      rainPointsLayer.addTo(map);
     }
 
-    const fechaLlegada = new Date(fechaSalida.getTime() + duracionSeg * 1000);
-
-    const destinoRes = await fetch(
-      '/api/destino-meteo?lat=' + encodeURIComponent(destino.lat) +
-      '&lon=' + encodeURIComponent(destino.lon) +
-      '&fechaLlegada=' + encodeURIComponent(fechaLlegada.toISOString()) +
-      '&dias=5'
-    );
-    const destinoData = await destinoRes.json();
-
-    if (destinoData.error) {
-      throw new Error(destinoData.error);
-    }
-
-    pintarTrayectoHorario(meteoData.puntos || []);
-    pintarLlegadaDestino(destinoData.llegada);
-    pintarDiasDestino(destinoData.dias || []);
-
-    return {
-      meteoRuta: meteoData,
-      meteoDestino: destinoData,
-      fechaLlegada
-    };
-  }
-
-  async function calcularRuta() {
-    try {
-      const origenTxt = document.getElementById("origen").value.trim();
-      const destinoTxt = document.getElementById("destino").value.trim();
-      const horaSalidaTxt = document.getElementById("horaSalida").value;
-      const fechaSalida = horaSalidaTxt ? new Date(horaSalidaTxt) : null;
-
-      if (!origenTxt || !destinoTxt) {
-        alert("Introduce origen y destino");
-        return;
-      }
-
-      if (!fechaSalida || isNaN(fechaSalida.getTime())) {
-        alert("Introduce una hora de salida válida");
-        return;
-      }
-
-      currentOrigenTxt = origenTxt;
-      currentDestinoTxt = destinoTxt;
-
-      document.getElementById("estadoRuta").textContent = "Calculando estado de la ruta...";
-      document.getElementById("resumen").textContent = "Calculando...";
-      document.getElementById("meteoRuta").textContent = "Consultando datos meteorológicos...";
-      document.getElementById("meteoTrayecto").textContent = "Consultando meteo horaria del trayecto...";
-      document.getElementById("meteoLlegada").textContent = "Consultando previsión de llegada...";
-      document.getElementById("meteoDestinoDias").textContent = "Consultando días en destino...";
-      document.getElementById("nivelAviso").innerHTML = '<span class="badge verde">Calculando</span>';
-      document.getElementById("avisosOficiales").textContent = "Consultando avisos oficiales...";
-      document.getElementById("provinciasRuta").textContent = "Calculando provincias...";
-      document.getElementById("lluviaRutaEstado").textContent = "Todavía no analizada.";
-      document.getElementById("tramosConflictivos").textContent = "Calculando tramos conflictivos...";
-      document.getElementById("tramosRiesgoPro").textContent = "Todavía no calculados.";
-      document.getElementById("meteorutaProResultado").innerHTML = "Todavía no calculado.";
-      document.getElementById("alertasPro").innerHTML = "Todavía no calculadas.";
-      document.getElementById("rutaInteligenteResultado").innerHTML = "Todavía no calculado.";
-      pintarBannerRiesgo('verde');
-
-      const origen = await geocode(origenTxt);
-      const destino = await geocode(destinoTxt);
-
-      currentFechaSalida = fechaSalida;
-      currentDestino = destino;
-
-      if (rutaLayer) map.removeLayer(rutaLayer);
-      markersLayer.clearLayers();
-      limpiarCapasAvisosRuta();
-      limpiarRiesgoRutaPro();
-
+    function limpiarAnalisisLluvia() {
       if (rainPointsLayer) {
         map.removeLayer(rainPointsLayer);
         rainPointsLayer = null;
       }
-
-      const url = "https://router.project-osrm.org/route/v1/driving/" +
-        origen.lon + "," + origen.lat + ";" +
-        destino.lon + "," + destino.lat +
-        "?overview=full&geometries=geojson";
-
-      const res = await fetch(url);
-      const data = await res.json();
-
-      if (!data.routes || data.routes.length === 0) {
-        throw new Error("No se pudo calcular la ruta");
-      }
-
-      const route = data.routes[0];
-      const ruta = route.geometry;
-      const coords = ruta.coordinates;
-      currentRouteCoords = coords;
-      currentRouteDurationSec = route.duration;
-
-      const maxPuntosMeteo = coords.length > 300 ? 3 : 5;
-      const paso = Math.max(1, Math.floor(coords.length / maxPuntosMeteo));
-
-      const puntos = [];
-      for (let i = 0; i < coords.length; i += paso) {
-        const lon = coords[i][0];
-        const lat = coords[i][1];
-        const nombre = await reverseName(lat, lon);
-        puntos.push({ lat, lon, nombre, routeIndex: i });
-
-        if (puntos.length >= maxPuntosMeteo) {
-          break;
-        }
-      }
-
-      const ultimoIndex = coords.length - 1;
-      if (!puntos.length || puntos[puntos.length - 1].routeIndex !== ultimoIndex) {
-        const lon = coords[ultimoIndex][0];
-        const lat = coords[ultimoIndex][1];
-        const nombre = await reverseName(lat, lon);
-        puntos.push({ lat, lon, nombre, routeIndex: ultimoIndex });
-      }
-
-      currentRoutePoints = puntos;
-
-      const provinciasRuta = extraerProvinciasRuta(origenTxt, destinoTxt, puntos);
-      currentProvinciasRuta = provinciasRuta;
-      document.getElementById("provinciasRuta").innerText =
-        provinciasRuta.length ? provinciasRuta.join(', ') : 'No detectadas';
-
-      const meteoAvanzada = await cargarMeteoAvanzada(puntos, fechaSalida, route.duration, destino);
-
-      const fechaParam = encodeURIComponent(fechaSalida.toISOString());
-      const provParam = encodeURIComponent(provinciasRuta.join(','));
-      const avisosRes = await fetch('/api/avisos-oficiales?area=esp&provincias=' + provParam + '&fecha=' + fechaParam);
-      const avisosData = await avisosRes.json();
-
-      if (avisosData.error) {
-        throw new Error(avisosData.error);
-      }
-
-      const avisosRuta = Array.isArray(avisosData.avisos) ? avisosData.avisos : [];
-      const coloresAvisos = avisosRuta.map(a => a.nivel || 'verde');
-      const avisoGlobal = avisosRuta.length ? peorAviso(coloresAvisos) : 'verde';
-
-      pintarBannerRiesgo(avisoGlobal);
-
-      // Ruta base muy sutil para soporte visual
-      rutaLayer = L.geoJSON(ruta, {
-        style: {
-          color: '#64748b',
-          weight: 3,
-          opacity: 0.12
-        }
-      }).addTo(map);
-
-      // Aquí se pinta la ruta real por colores de aviso
-      pintarTramosYAvisos(coords, puntos, avisosRuta);
-
-      map.fitBounds(rutaLayer.getBounds());
-
-      let textoMeteo = '';
-      (meteoAvanzada.meteoRuta.puntos || []).forEach((p, idx) => {
-        const popup = p.error
-          ? '<strong>Punto ' + (idx + 1) + '</strong><br>' + (p.nombre || 'Ruta') + '<br>' + p.error
-          : '<strong>' + (p.nombre || 'Ruta') + '</strong><br>' +
-            'Hora estimada: ' + formatDateTimeEs(p.horaPaso) + '<br>' +
-            'Estado: ' + (p.estado || 'Sin dato') + '<br>' +
-            'Temperatura: ' + (p.temperatura ?? '—') + '°C<br>' +
-            'Prob. lluvia: ' + (p.probLluvia ?? '—') + '%';
-
-        L.marker([p.lat, p.lon]).addTo(markersLayer).bindPopup(popup);
-
-        textoMeteo += (idx + 1) + '. ' + (p.nombre || 'Ruta') + '\n';
-        textoMeteo += 'Hora estimada: ' + formatDateTimeEs(p.horaPaso) + '\n';
-        textoMeteo += 'Estado: ' + (p.estado || 'Sin dato') + '\n';
-        textoMeteo += 'Temperatura: ' + (p.temperatura ?? '—') + '°C\n';
-        textoMeteo += 'Prob. lluvia: ' + (p.probLluvia ?? '—') + '%\n';
-        textoMeteo += 'Precipitación: ' + (p.precipitacion ?? '—') + ' mm\n';
-        textoMeteo += 'Viento: ' + (p.viento ?? '—') + ' km/h\n\n';
-      });
-
-      document.getElementById("resumen").innerText =
-        "Distancia: " + (route.distance / 1000).toFixed(1) + " km\n" +
-        "Duración estimada: " + Math.round(route.duration / 60) + " min\n" +
-        "Hora de salida: " + fechaSalida.toLocaleString('es-ES') + "\n" +
-        "Hora estimada de llegada: " + meteoAvanzada.fechaLlegada.toLocaleString('es-ES');
-
-      document.getElementById("meteoRuta").innerText = textoMeteo || 'Sin datos meteorológicos.';
-      document.getElementById("nivelAviso").innerHTML = badgeAviso(avisoGlobal);
-      pintarAvisosOficiales(avisosRuta, avisosData);
-      actualizarEstadoRuta(avisoGlobal, provinciasRuta, meteoAvanzada.fechaLlegada);
-
-    } catch (e) {
-      console.error(e);
-      alert(e.message);
-      document.getElementById("estadoRuta").textContent = "No se pudo calcular el estado de la ruta.";
-      document.getElementById("resumen").textContent = "No se pudo calcular.";
-      document.getElementById("meteoRuta").textContent = "No se pudo consultar la meteorología.";
-      document.getElementById("meteoTrayecto").textContent = "No se pudo calcular la meteo horaria.";
-      document.getElementById("meteoLlegada").textContent = "No se pudo calcular la llegada.";
-      document.getElementById("meteoDestinoDias").textContent = "No se pudo calcular la previsión de destino.";
-      document.getElementById("avisosOficiales").textContent = "No se pudieron consultar los avisos oficiales.";
-      document.getElementById("provinciasRuta").textContent = "No se pudieron detectar provincias.";
-      document.getElementById("lluviaRutaEstado").textContent = "No se pudo analizar la lluvia.";
-      document.getElementById("tramosConflictivos").textContent = "No se pudieron calcular.";
-      document.getElementById("tramosRiesgoPro").textContent = "No se pudieron calcular.";
-      document.getElementById("meteorutaProResultado").innerHTML = "No se pudo calcular MeteoRuta Pro.";
-      document.getElementById("alertasPro").innerHTML = "No se pudieron calcular las alertas pro.";
-      document.getElementById("rutaInteligenteResultado").innerHTML = "No se pudo calcular la ruta inteligente.";
-      pintarBannerRiesgo('verde');
+      document.getElementById('lluviaRutaEstado').textContent = 'Análisis de lluvia limpiado.';
     }
-  }
 
-  setTimeout(() => map.invalidateSize(), 300);
-  ensureLegend();
-  cargarRadar();
-  pintarBannerRiesgo('verde');
-</script>
+    async function analizarLluviaRuta() {
+      try {
+        if (!currentRouteCoords || currentRouteCoords.length === 0) {
+          alert('Primero calcula una ruta');
+          return;
+        }
+
+        document.getElementById('lluviaRutaEstado').textContent = 'Analizando lluvia sobre la ruta...';
+
+        const sampledPoints = sampleRoutePoints(currentRouteCoords, 20);
+        const results = [];
+
+        for (const coord of sampledPoints) {
+          const [lon, lat] = coord;
+
+          try {
+            const rainData = await getRainForPoint(lat, lon);
+
+            results.push({
+              lat,
+              lon,
+              precipitation: rainData.precipitation,
+              rain: rainData.rain,
+              showers: rainData.showers
+            });
+          } catch (error) {
+            console.error('Error consultando punto de lluvia:', lat, lon, error);
+          }
+        }
+
+        drawRainPoints(results);
+
+        const rainyPoints = results.filter(p => p.precipitation > 0);
+        const strongPoints = results.filter(p => p.precipitation >= 2);
+
+        if (rainyPoints.length === 0) {
+          document.getElementById('lluviaRutaEstado').textContent =
+            'No se detecta lluvia en los puntos analizados de la ruta.';
+        } else {
+          document.getElementById('lluviaRutaEstado').textContent =
+            'Lluvia detectada en ' + rainyPoints.length +
+            ' puntos. Lluvia moderada/fuerte: ' + strongPoints.length + '.';
+        }
+
+        const nivelHtml = document.getElementById('nivelAviso').innerText.toLowerCase();
+        let avisoGlobal = 'verde';
+        if (nivelHtml.includes('rojo')) avisoGlobal = 'rojo';
+        else if (nivelHtml.includes('naranja')) avisoGlobal = 'naranja';
+        else if (nivelHtml.includes('amarillo')) avisoGlobal = 'amarillo';
+
+        const provinciasTexto = document.getElementById('provinciasRuta').innerText;
+        const provinciasRuta = provinciasTexto === 'No detectadas' ? [] : provinciasTexto.split(',').map(x => x.trim());
+        const fechaLlegada = currentFechaSalida && currentRouteDurationSec
+          ? new Date(currentFechaSalida.getTime() + currentRouteDurationSec * 1000)
+          : null;
+
+        actualizarEstadoRuta(avisoGlobal, provinciasRuta, fechaLlegada);
+
+      } catch (e) {
+        console.error(e);
+        document.getElementById('lluviaRutaEstado').textContent = 'No se pudo analizar la lluvia en la ruta.';
+      }
+    }
+
+    function pintarTrayectoHorario(puntos) {
+      const cont = document.getElementById('meteoTrayecto');
+
+      if (!Array.isArray(puntos) || !puntos.length) {
+        cont.innerHTML = 'Sin previsión horaria de trayecto.';
+        return;
+      }
+
+      cont.innerHTML = puntos.map(p => pintarForecastCompacto(p)).join('');
+    }
+
+    function pintarLlegadaDestino(llegada) {
+      const cont = document.getElementById('meteoLlegada');
+
+      if (!llegada) {
+        cont.innerHTML = 'Sin previsión de llegada.';
+        return;
+      }
+
+      cont.innerHTML = `
+        <div class="forecast-card">
+          <div class="forecast-title">Condiciones a la llegada</div>
+          <div class="compact-line">Hora: ${formatDateTimeEs(llegada.hora)}</div>
+          <div class="compact-line">Estado: ${llegada.estado || 'Sin dato'}</div>
+          <div class="compact-line">Temperatura: ${llegada.temperatura ?? '—'}°C | Prob. lluvia: ${llegada.probLluvia ?? '—'}% | Viento: ${llegada.viento ?? '—'} km/h</div>
+          <div class="compact-line">Precipitación: ${llegada.precipitacion ?? '—'} mm</div>
+        </div>
+      `;
+    }
+
+    function pintarDiasDestino(dias) {
+      const cont = document.getElementById('meteoDestinoDias');
+
+      if (!Array.isArray(dias) || !dias.length) {
+        cont.innerHTML = 'Sin previsión de días en destino.';
+        return;
+      }
+
+      cont.innerHTML = dias.map(d => `
+        <div class="forecast-card">
+          <div class="forecast-title">${formatDateEs(d.fecha)}</div>
+          <div class="compact-line">Estado: ${d.estado || 'Sin dato'}</div>
+          <div class="compact-line">Máx ${d.tempMax ?? '—'}°C | Mín ${d.tempMin ?? '—'}°C</div>
+          <div class="compact-line">Prob. lluvia: ${d.probLluviaMax ?? '—'}% | Viento: ${d.vientoMax ?? '—'} km/h</div>
+        </div>
+      `).join('');
+    }
+
+    async function analizarRiesgoRutaPro() {
+      try {
+        if (!currentRoutePoints || !currentRoutePoints.length) {
+          alert('Primero calcula una ruta');
+          return;
+        }
+
+        document.getElementById('meteorutaProResultado').innerHTML = 'Analizando riesgo de ruta...';
+        document.getElementById('tramosRiesgoPro').innerHTML = 'Calculando tramos de riesgo...';
+        document.getElementById('alertasPro').innerHTML = 'Calculando alertas pro...';
+
+        const res = await fetch('/api/route/analyze', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            puntos: currentRoutePoints,
+            fechaSalida: currentFechaSalida ? currentFechaSalida.toISOString() : new Date().toISOString(),
+            duracionSeg: currentRouteDurationSec || 0,
+            provincias: currentProvinciasRuta
+          })
+        });
+
+        const data = await res.json();
+
+        if (data.error) {
+          throw new Error(data.error);
+        }
+
+        lastRiskAnalysis = data;
+
+        document.getElementById('meteorutaProResultado').innerHTML = construirHtmlResultadoPro(data);
+        pintarPanelRiesgoPro(data.puntos || []);
+        pintarPinsRiesgoPro(data.puntos || []);
+        pintarRutaRiesgoPro(data.puntos || []);
+        pintarAlertasPro(generarAlertasPro(data, lastBestDeparture));
+
+      } catch (error) {
+        console.error(error);
+        document.getElementById('meteorutaProResultado').innerHTML = 'No se pudo analizar el riesgo de la ruta.';
+        document.getElementById('tramosRiesgoPro').innerHTML = 'No se pudieron calcular los tramos de riesgo.';
+        document.getElementById('alertasPro').innerHTML = 'No se pudieron calcular las alertas pro.';
+      }
+    }
+
+    async function calcularMejorSalidaPro() {
+      try {
+        if (!currentRoutePoints || !currentRoutePoints.length) {
+          alert('Primero calcula una ruta');
+          return;
+        }
+
+        document.getElementById('meteorutaProResultado').innerHTML = 'Calculando mejor hora de salida...';
+
+        const res = await fetch('/api/route/best-departure', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            puntos: currentRoutePoints,
+            fechaSalida: currentFechaSalida ? currentFechaSalida.toISOString() : new Date().toISOString(),
+            duracionSeg: currentRouteDurationSec || 0,
+            horasVentana: 6,
+            pasoMinutos: 30,
+            provincias: currentProvinciasRuta
+          })
+        });
+
+        const data = await res.json();
+
+        if (data.error) {
+          throw new Error(data.error);
+        }
+
+        lastBestDeparture = data;
+        document.getElementById('meteorutaProResultado').innerHTML = construirHtmlMejorSalida(data);
+
+        if (lastRiskAnalysis) {
+          pintarAlertasPro(generarAlertasPro(lastRiskAnalysis, data));
+        }
+
+      } catch (error) {
+        console.error(error);
+        document.getElementById('meteorutaProResultado').innerHTML = 'No se pudo calcular la mejor hora de salida.';
+      }
+    }
+
+    async function calcularRutaInteligente() {
+      try {
+        if (!currentRoutePoints || !currentRoutePoints.length) {
+          alert('Primero calcula una ruta');
+          return;
+        }
+
+        document.getElementById('rutaInteligenteResultado').innerHTML = 'Analizando ruta inteligente...';
+
+        const res = await fetch('/api/route/intelligent', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            puntos: currentRoutePoints,
+            fechaSalida: currentFechaSalida
+              ? currentFechaSalida.toISOString()
+              : new Date().toISOString(),
+            duracionSeg: currentRouteDurationSec || 0,
+            horasVentana: 6,
+            pasoMinutos: 30,
+            provincias: currentProvinciasRuta
+          })
+        });
+
+        const data = await res.json();
+
+        if (data.error) {
+          throw new Error(data.error);
+        }
+
+        lastSmartRoute = data;
+        document.getElementById('rutaInteligenteResultado').innerHTML = construirHtmlRutaInteligente(data);
+
+      } catch (error) {
+        console.error(error);
+        document.getElementById('rutaInteligenteResultado').innerHTML = 'No se pudo calcular la ruta inteligente.';
+      }
+    }
+
+    async function cargarMeteoAvanzada(puntos, fechaSalida, duracionSeg, destino) {
+      const q = encodeURIComponent(JSON.stringify(puntos));
+      const fechaSalidaIso = encodeURIComponent(fechaSalida.toISOString());
+
+      const meteoRes = await fetch(
+        '/api/ruta-meteo?puntos=' + q +
+        '&fechaSalida=' + fechaSalidaIso +
+        '&duracionSeg=' + encodeURIComponent(duracionSeg)
+      );
+      const meteoData = await meteoRes.json();
+
+      if (meteoData.error) {
+        throw new Error(meteoData.error);
+      }
+
+      const fechaLlegada = new Date(fechaSalida.getTime() + duracionSeg * 1000);
+
+      const destinoRes = await fetch(
+        '/api/destino-meteo?lat=' + encodeURIComponent(destino.lat) +
+        '&lon=' + encodeURIComponent(destino.lon) +
+        '&fechaLlegada=' + encodeURIComponent(fechaLlegada.toISOString()) +
+        '&dias=5'
+      );
+      const destinoData = await destinoRes.json();
+
+      if (destinoData.error) {
+        throw new Error(destinoData.error);
+      }
+
+      pintarTrayectoHorario(meteoData.puntos || []);
+      pintarLlegadaDestino(destinoData.llegada);
+      pintarDiasDestino(destinoData.dias || []);
+
+      return {
+        meteoRuta: meteoData,
+        meteoDestino: destinoData,
+        fechaLlegada
+      };
+    }
+
+    async function calcularRuta() {
+      try {
+        const origenTxt = document.getElementById("origen").value.trim();
+        const destinoTxt = document.getElementById("destino").value.trim();
+        const horaSalidaTxt = document.getElementById("horaSalida").value;
+        const fechaSalida = horaSalidaTxt ? new Date(horaSalidaTxt) : null;
+
+        if (!origenTxt || !destinoTxt) {
+          alert("Introduce origen y destino");
+          return;
+        }
+
+        if (!fechaSalida || isNaN(fechaSalida.getTime())) {
+          alert("Introduce una hora de salida válida");
+          return;
+        }
+
+        currentOrigenTxt = origenTxt;
+        currentDestinoTxt = destinoTxt;
+
+        document.getElementById("estadoRuta").textContent = "Calculando estado de la ruta...";
+        document.getElementById("resumen").textContent = "Calculando...";
+        document.getElementById("meteoRuta").textContent = "Consultando datos meteorológicos...";
+        document.getElementById("meteoTrayecto").textContent = "Consultando meteo horaria del trayecto...";
+        document.getElementById("meteoLlegada").textContent = "Consultando previsión de llegada...";
+        document.getElementById("meteoDestinoDias").textContent = "Consultando días en destino...";
+        document.getElementById("nivelAviso").innerHTML = '<span class="badge verde">Calculando</span>';
+        document.getElementById("avisosOficiales").textContent = "Consultando avisos oficiales...";
+        document.getElementById("provinciasRuta").textContent = "Calculando provincias...";
+        document.getElementById("lluviaRutaEstado").textContent = "Todavía no analizada.";
+        document.getElementById("tramosConflictivos").textContent = "Calculando tramos conflictivos...";
+        document.getElementById("tramosRiesgoPro").textContent = "Todavía no calculados.";
+        document.getElementById("meteorutaProResultado").innerHTML = "Todavía no calculado.";
+        document.getElementById("alertasPro").innerHTML = "Todavía no calculadas.";
+        document.getElementById("rutaInteligenteResultado").innerHTML = "Todavía no calculado.";
+        pintarBannerRiesgo('verde');
+
+        const origen = await geocode(origenTxt);
+        const destino = await geocode(destinoTxt);
+
+        currentFechaSalida = fechaSalida;
+        currentDestino = destino;
+
+        if (rutaLayer) map.removeLayer(rutaLayer);
+        markersLayer.clearLayers();
+        limpiarCapasAvisosRuta();
+        limpiarRiesgoRutaPro();
+
+        if (rainPointsLayer) {
+          map.removeLayer(rainPointsLayer);
+          rainPointsLayer = null;
+        }
+
+        const url = "https://router.project-osrm.org/route/v1/driving/" +
+          origen.lon + "," + origen.lat + ";" +
+          destino.lon + "," + destino.lat +
+          "?overview=full&geometries=geojson";
+
+        const res = await fetch(url);
+        const data = await res.json();
+
+        if (!data.routes || data.routes.length === 0) {
+          throw new Error("No se pudo calcular la ruta");
+        }
+
+        const route = data.routes[0];
+        const ruta = route.geometry;
+        const coords = ruta.coordinates;
+        currentRouteCoords = coords;
+        currentRouteDurationSec = route.duration;
+
+        const maxPuntosMeteo = coords.length > 300 ? 3 : 5;
+        const paso = Math.max(1, Math.floor(coords.length / maxPuntosMeteo));
+
+        const puntos = [];
+        for (let i = 0; i < coords.length; i += paso) {
+          const lon = coords[i][0];
+          const lat = coords[i][1];
+          const nombre = await reverseName(lat, lon);
+          puntos.push({ lat, lon, nombre, routeIndex: i });
+
+          if (puntos.length >= maxPuntosMeteo) {
+            break;
+          }
+        }
+
+        const ultimoIndex = coords.length - 1;
+        if (!puntos.length || puntos[puntos.length - 1].routeIndex !== ultimoIndex) {
+          const lon = coords[ultimoIndex][0];
+          const lat = coords[ultimoIndex][1];
+          const nombre = await reverseName(lat, lon);
+          puntos.push({ lat, lon, nombre, routeIndex: ultimoIndex });
+        }
+
+        currentRoutePoints = puntos;
+
+        const provinciasRuta = extraerProvinciasRuta(origenTxt, destinoTxt, puntos);
+        currentProvinciasRuta = provinciasRuta;
+        document.getElementById("provinciasRuta").innerText =
+          provinciasRuta.length ? provinciasRuta.join(', ') : 'No detectadas';
+
+        const meteoAvanzada = await cargarMeteoAvanzada(puntos, fechaSalida, route.duration, destino);
+
+        const fechaParam = encodeURIComponent(fechaSalida.toISOString());
+        const provParam = encodeURIComponent(provinciasRuta.join(','));
+        const avisosRes = await fetch('/api/avisos-oficiales?area=esp&provincias=' + provParam + '&fecha=' + fechaParam);
+        const avisosData = await avisosRes.json();
+
+        if (avisosData.error) {
+          throw new Error(avisosData.error);
+        }
+
+        const avisosRuta = Array.isArray(avisosData.avisos) ? avisosData.avisos : [];
+        const coloresAvisos = avisosRuta.map(a => a.nivel || 'verde');
+        const avisoGlobal = avisosRuta.length ? peorAviso(coloresAvisos) : 'verde';
+
+        pintarBannerRiesgo(avisoGlobal);
+
+        rutaLayer = L.geoJSON(ruta, {
+          style: {
+            color: '#16a34a',
+            weight: 2,
+            opacity: 0.15
+          }
+        }).addTo(map);
+
+        pintarTramosYAvisos(coords, puntos, avisosRuta);
+
+        map.fitBounds(rutaLayer.getBounds());
+
+        let textoMeteo = '';
+        (meteoAvanzada.meteoRuta.puntos || []).forEach((p, idx) => {
+          const popup = p.error
+            ? '<strong>Punto ' + (idx + 1) + '</strong><br>' + (p.nombre || 'Ruta') + '<br>' + p.error
+            : '<strong>' + (p.nombre || 'Ruta') + '</strong><br>' +
+              'Hora estimada: ' + formatDateTimeEs(p.horaPaso) + '<br>' +
+              'Estado: ' + (p.estado || 'Sin dato') + '<br>' +
+              'Temperatura: ' + (p.temperatura ?? '—') + '°C<br>' +
+              'Prob. lluvia: ' + (p.probLluvia ?? '—') + '%';
+
+          L.marker([p.lat, p.lon]).addTo(markersLayer).bindPopup(popup);
+
+          textoMeteo += (idx + 1) + '. ' + (p.nombre || 'Ruta') + '\n';
+          textoMeteo += 'Hora estimada: ' + formatDateTimeEs(p.horaPaso) + '\n';
+          textoMeteo += 'Estado: ' + (p.estado || 'Sin dato') + '\n';
+          textoMeteo += 'Temperatura: ' + (p.temperatura ?? '—') + '°C\n';
+          textoMeteo += 'Prob. lluvia: ' + (p.probLluvia ?? '—') + '%\n';
+          textoMeteo += 'Precipitación: ' + (p.precipitacion ?? '—') + ' mm\n';
+          textoMeteo += 'Viento: ' + (p.viento ?? '—') + ' km/h\n\n';
+        });
+
+        document.getElementById("resumen").innerText =
+          "Distancia: " + (route.distance / 1000).toFixed(1) + " km\n" +
+          "Duración estimada: " + Math.round(route.duration / 60) + " min\n" +
+          "Hora de salida: " + fechaSalida.toLocaleString('es-ES') + "\n" +
+          "Hora estimada de llegada: " + meteoAvanzada.fechaLlegada.toLocaleString('es-ES');
+
+        document.getElementById("meteoRuta").innerText = textoMeteo || 'Sin datos meteorológicos.';
+        document.getElementById("nivelAviso").innerHTML = badgeAviso(avisoGlobal);
+        pintarAvisosOficiales(avisosRuta, avisosData);
+        actualizarEstadoRuta(avisoGlobal, provinciasRuta, meteoAvanzada.fechaLlegada);
+
+      } catch (e) {
+        console.error(e);
+        alert(e.message);
+        document.getElementById("estadoRuta").textContent = "No se pudo calcular el estado de la ruta.";
+        document.getElementById("resumen").textContent = "No se pudo calcular.";
+        document.getElementById("meteoRuta").textContent = "No se pudo consultar la meteorología.";
+        document.getElementById("meteoTrayecto").textContent = "No se pudo calcular la meteo horaria.";
+        document.getElementById("meteoLlegada").textContent = "No se pudo calcular la llegada.";
+        document.getElementById("meteoDestinoDias").textContent = "No se pudo calcular la previsión de destino.";
+        document.getElementById("avisosOficiales").textContent = "No se pudieron consultar los avisos oficiales.";
+        document.getElementById("provinciasRuta").textContent = "No se pudieron detectar provincias.";
+        document.getElementById("lluviaRutaEstado").textContent = "No se pudo analizar la lluvia.";
+        document.getElementById("tramosConflictivos").textContent = "No se pudieron calcular.";
+        document.getElementById("tramosRiesgoPro").textContent = "No se pudieron calcular.";
+        document.getElementById("meteorutaProResultado").innerHTML = "No se pudo calcular MeteoRuta Pro.";
+        document.getElementById("alertasPro").innerHTML = "No se pudieron calcular las alertas pro.";
+        document.getElementById("rutaInteligenteResultado").innerHTML = "No se pudo calcular la ruta inteligente.";
+        pintarBannerRiesgo('verde');
+      }
+    }
+
+    setTimeout(() => map.invalidateSize(), 300);
+    ensureLegend();
+    cargarRadar();
+    pintarBannerRiesgo('verde');
+  </script>
+</body>
+</html>
