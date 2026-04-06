@@ -1337,13 +1337,13 @@ function estiloRutaBasePorAviso(avisoGlobal) {
           .slice(startIndex, endIndex + 1)
           .map(c => [c[1], c[0]]);
 
-        if (tramoCoords.length >= 2) {
-          L.polyline(tramoCoords, {
-            color: colorTramoAviso(nivel),
-            weight: nivel === 'verde' ? 6 : 8,
-            opacity: nivel === 'verde' ? 0.85 : 0.95
-          }).addTo(avisoTramosLayer);
-        }
+if (tramoCoords.length >= 2 && nivel !== 'verde') {
+  L.polyline(tramoCoords, {
+    color: colorTramoAviso(nivel),
+    weight: 8,
+    opacity: 0.95
+  }).addTo(avisoTramosLayer);
+}
 
         segmentos.push({
           nivel,
