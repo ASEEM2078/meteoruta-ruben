@@ -643,6 +643,30 @@
     let lastBestDeparture = null;
     let lastSmartRoute = null;
 
+    // --- Aviso lluvia (global) ---
+let lluviaDetectadaEnRuta = false;
+
+function pintarAvisoLluviaBanner() {
+  const cont = document.getElementById('riesgoGlobalBanner');
+  if (!cont) return;
+
+  // Evita duplicados (si ya existe, lo quitamos)
+  const prev = document.getElementById('bannerLluviaRuta');
+  if (prev) prev.remove();
+
+  // Si no hay lluvia detectada, no mostramos nada
+  if (!lluviaDetectadaEnRuta) return;
+
+  // Banner azul
+  const div = document.createElement('div');
+  div.id = 'bannerLluviaRuta';
+  div.className = 'banner-box';
+  div.style.background = '#2563eb';
+  div.textContent = 'AVISO: LLUVIA DETECTADA EN LA RUTA';
+  cont.appendChild(div);
+}
+// --- Fin aviso lluvia ---
+
     const PROVINCE_ALIASES = {
       alicante: ['alicante', 'alacant', 'alicantino', 'alicantina'],
       castellon: ['castellon', 'castello', 'castellonense'],
@@ -2001,6 +2025,9 @@ if (tramoCoords.length >= 2 && nivel !== 'verde') {
         const rainyPoints = results.filter(p => p.precipitation > 0);
         const strongPoints = results.filter(p => p.precipitation >= 2);
 
+        lluviaDetectadaEnRuta = rainyPoints.length > 0;
+        pintarAvisoLluviaBanner();
+
         if (rainyPoints.length === 0) {
           document.getElementById('lluviaRutaEstado').textContent =
             'No se detecta lluvia en los puntos analizados de la ruta.';
@@ -2363,6 +2390,7 @@ if (tramoCoords.length >= 2 && nivel !== 'verde') {
         const avisoGlobal = avisosRuta.length ? peorAviso(coloresAvisos) : 'verde';
 
         pintarBannerRiesgo(avisoGlobal);
+        pintarAvisoLluviaBanner();
 
 rutaLayer = L.geoJSON(ruta, {
   style: estiloRutaBasePorAviso(avisoGlobal)
@@ -2403,6 +2431,8 @@ rutaLayer = L.geoJSON(ruta, {
         document.getElementById("nivelAviso").innerHTML = badgeAviso(avisoGlobal);
         pintarAvisosOficiales(avisosRuta, avisosData);
         actualizarEstadoRuta(avisoGlobal, provinciasRuta, meteoAvanzada.fechaLlegada);
+        // Auto-analizar lluvia (aviso aunque no haya aviso oficial)
+        analizarLluviaRuta();
 
       } catch (e) {
         console.error(e);
