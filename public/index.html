@@ -953,11 +953,13 @@
       if (nivel === 'amarillo') return '#eab308';
       return '#16a34a';
     }
-    function estiloRutaBasePorAviso(avisoGlobal) {
-  const color = colorTramoAviso(avisoGlobal);   // usa la misma paleta
-  const weight = avisoGlobal === 'verde' ? 3 : 4;
-  const opacity = avisoGlobal === 'verde' ? 0.25 : 0.40;
-  return { color, weight, opacity };
+function estiloRutaBasePorAviso(avisoGlobal) {
+  const color = colorTramoAviso(avisoGlobal);
+  return {
+    color,
+    weight: avisoGlobal === 'verde' ? 5 : 7,
+    opacity: avisoGlobal === 'verde' ? 0.6 : 0.9
+  };
 }
 
     function pillTramo(nivel) {
