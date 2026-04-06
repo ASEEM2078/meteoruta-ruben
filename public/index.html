@@ -953,6 +953,12 @@
       if (nivel === 'amarillo') return '#eab308';
       return '#16a34a';
     }
+    function estiloRutaBasePorAviso(avisoGlobal) {
+  const color = colorTramoAviso(avisoGlobal);   // usa la misma paleta
+  const weight = avisoGlobal === 'verde' ? 3 : 4;
+  const opacity = avisoGlobal === 'verde' ? 0.25 : 0.40;
+  return { color, weight, opacity };
+}
 
     function pillTramo(nivel) {
       if (nivel === 'rojo') return '<span class="tramo-pill pill-rojo">Aviso rojo</span>';
@@ -2356,13 +2362,9 @@
 
         pintarBannerRiesgo(avisoGlobal);
 
-        rutaLayer = L.geoJSON(ruta, {
-          style: {
-            color: '#16a34a',
-            weight: 2,
-            opacity: 0.15
-          }
-        }).addTo(map);
+rutaLayer = L.geoJSON(ruta, {
+  style: estiloRutaBasePorAviso(avisoGlobal)
+}).addTo(map);
 
         pintarTramosYAvisos(coords, puntos, avisosRuta);
 
