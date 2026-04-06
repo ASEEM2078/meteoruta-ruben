@@ -1038,7 +1038,7 @@ function estiloRutaBasePorAviso(avisoGlobal) {
         const div = L.DomUtil.create('div', 'legend-control');
         div.innerHTML = `
           <div class="legend-title">Leyenda</div>
-          <div class="legend-row"><span class="legend-color" style="background:#16a34a;"></span><span>Ruta base</span></div>
+          <div class="legend-row"><span class="legend-color" style="background:#64748b;"></span><span>Ruta base</span></div>
           <div class="legend-row"><span class="legend-color" style="background:#eab308;"></span><span>Riesgo moderado</span></div>
           <div class="legend-row"><span class="legend-color" style="background:#f97316;"></span><span>Riesgo alto</span></div>
           <div class="legend-row"><span class="legend-color" style="background:#dc2626;"></span><span>Riesgo muy alto</span></div>
@@ -2393,7 +2393,11 @@ if (tramoCoords.length >= 2 && nivel !== 'verde') {
         pintarAvisoLluviaBanner();
 
 rutaLayer = L.geoJSON(ruta, {
-  style: estiloRutaBasePorAviso(avisoGlobal)
+  style: {
+    color: '#64748b',   // gris neutro
+    weight: 4,
+    opacity: 0.45
+  }
 }).addTo(map);
 
         pintarTramosYAvisos(coords, puntos, avisosRuta);
