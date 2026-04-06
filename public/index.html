@@ -2,7 +2,7 @@
 <html lang="es">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">estiloRutaBasePorAviso
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>MeteoRuta Pro - Rubén López de Quero</title>
   <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css"/>
   <style>
@@ -947,19 +947,12 @@
       return 0;
     }
 
-function estiloRutaBasePorAviso(avisoGlobal) {
-  let color = '#16a34a'; // verde por defecto
-
-  if (avisoGlobal === 'amarillo') color = '#eab308';
-  else if (avisoGlobal === 'naranja') color = '#f97316';
-  else if (avisoGlobal === 'rojo') color = '#dc2626';
-
-  const weight = avisoGlobal === 'verde' ? 4 : 6;
-  const opacity = avisoGlobal === 'verde' ? 0.45 : 0.75;
-
-  return { color, weight, opacity };
-}
-``
+    function colorTramoAviso(nivel) {
+      if (nivel === 'rojo') return '#dc2626';
+      if (nivel === 'naranja') return '#f97316';
+      if (nivel === 'amarillo') return '#eab308';
+      return '#16a34a';
+    }
 
     function pillTramo(nivel) {
       if (nivel === 'rojo') return '<span class="tramo-pill pill-rojo">Aviso rojo</span>';
@@ -2364,7 +2357,11 @@ function estiloRutaBasePorAviso(avisoGlobal) {
         pintarBannerRiesgo(avisoGlobal);
 
         rutaLayer = L.geoJSON(ruta, {
-          style: estiloRutaBasePorAviso(avisoGlobal)
+          style: {
+            color: '#16a34a',
+            weight: 2,
+            opacity: 0.15
+          }
         }).addTo(map);
 
         pintarTramosYAvisos(coords, puntos, avisosRuta);
