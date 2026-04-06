@@ -662,7 +662,7 @@ function pintarAvisoLluviaBanner() {
   div.id = 'bannerLluviaRuta';
   div.className = 'banner-box';
   div.style.background = '#2563eb';
-  div.textContent = 'AVISO: LLUVIA DETECTADA EN LA RUTA';
+  div.textContent = 'AVISO: LLUVIA ESTIMADA';
   cont.appendChild(div);
 }
 // --- Fin aviso lluvia ---
@@ -2395,8 +2395,8 @@ if (tramoCoords.length >= 2 && nivel !== 'verde') {
 rutaLayer = L.geoJSON(ruta, {
   style: {
     color: '#64748b',   // gris neutro
-    weight: 4,
-    opacity: 0.45
+    weight: 3,
+    opacity: 0.20
   }
 }).addTo(map);
 
