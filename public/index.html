@@ -2393,10 +2393,8 @@ if (tramoCoords.length >= 2 && nivel !== 'verde') {
         pintarAvisoLluviaBanner();
 
 rutaLayer = L.geoJSON(ruta, {
-  style: {
-    color: '#64748b',   // gris neutro
-    weight: 4,
-    opacity: 0.
+  style: estiloRutaBasePorAviso(avisoGlobal)
+}).addTo(map);
 
         pintarTramosYAvisos(coords, puntos, avisosRuta);
 
