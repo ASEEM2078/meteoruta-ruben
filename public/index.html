@@ -947,50 +947,19 @@
       return 0;
     }
 
-function colorTramoAviso(nivel) {
-  if (nivel === 'rojo') return '#dc2626';
-  if (nivel === 'naranja') return '#f97316';
-  if (nivel === 'amarillo') return '#eab308';
-  return '#16a34a';
-}
+    function colorTramoAviso(nivel) {
+      if (nivel === 'rojo') return '#dc2626';
+      if (nivel === 'naranja') return '#f97316';
+      if (nivel === 'amarillo') return '#eab308';
+      return '#16a34a';
+    }
 
-// ✅ NUEVO: estilo de la ruta base según el aviso global
-function estiloRutaBasePorAviso(avisoGlobal) {
-  const color = colorTramoAviso(avisoGlobal);
-  const weight = avisoGlobal === 'verde' ? 4 : 6;
-  const opacity = avisoGlobal === 'verde' ? 0.45 : 0.75;
-  return { color, weight, opacity };
-}
-
-function pillTramo(nivel) {
-  if (nivel === 'rojo') return '<span class="tramo-pill pill-rojo">Aviso rojo</span>';
-  if (nivel === 'naranja') return '<span class="tramo-pill pill-naranja">Aviso naranja</span>';
-  if (nivel === 'amarillo') return '<span class="tramo-pill pill-amarillo">Aviso amarillo</span>';
-  return '<span class="tramo-pill pill-verde">Sin aviso</span>';
-}
-``function colorTramoAviso(nivel) {
-  if (nivel === 'rojo') return '#dc2626';
-  if (nivel === 'naranja') return '#f97316';
-  if (nivel === 'amarillo') return '#eab308';
-  return '#16a34a';
-}
-
-// ✅ NUEVO: estilo de la ruta base según el aviso global
-function estiloRutaBasePorAviso(avisoGlobal) {
-  const color = colorTramoAviso(avisoGlobal);
-  const weight = avisoGlobal === 'verde' ? 4 : 6;
-  const opacity = avisoGlobal === 'verde' ? 0.45 : 0.75;
-  return { color, weight, opacity };
-}
-
-function pillTramo(nivel) {
-  if (nivel === 'rojo') return '<span class="tramo-pill pill-rojo">Aviso rojo</span>';
-  if (nivel === 'naranja') return '<span class="tramo-pill pill-naranja">Aviso naranja</span>';
-  if (nivel === 'amarillo') 
-    return '<span class="tramo-pill pill-amarillo">Aviso amarillo</span>';
-  return '<span class="tramo-pill pill-verde">Sin aviso</span>';
-}
-``
+    function pillTramo(nivel) {
+      if (nivel === 'rojo') return '<span class="tramo-pill pill-rojo">Aviso rojo</span>';
+      if (nivel === 'naranja') return '<span class="tramo-pill pill-naranja">Aviso naranja</span>';
+      if (nivel === 'amarillo') return '<span class="tramo-pill pill-amarillo">Aviso amarillo</span>';
+      return '<span class="tramo-pill pill-verde">Sin aviso</span>';
+    }
 
     function pillRiesgo(nivel) {
       if (nivel === 'muy alto') return '<span class="tramo-pill pill-rojo">Riesgo muy alto</span>';
@@ -2387,9 +2356,13 @@ function pillTramo(nivel) {
 
         pintarBannerRiesgo(avisoGlobal);
 
-rutaLayer = L.geoJSON(ruta, {
-  style: estiloRutaBasePorAviso(avisoGlobal)
-}).addTo(map);
+        rutaLayer = L.geoJSON(ruta, {
+          style: {
+            color: '#16a34a',
+            weight: 2,
+            opacity: 0.15
+          }
+        }).addTo(map);
 
         pintarTramosYAvisos(coords, puntos, avisosRuta);
 
