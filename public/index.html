@@ -1238,7 +1238,7 @@ function estiloRutaBasePorAviso(avisoGlobal) {
       const coincidencias = tokensNombre.filter(tok => texto.includes(tok)).length;
       score += coincidencias * 8;
 
-      return score >= 60;
+      return score >= 40;
     }
 
     function obtenerAvisosParaPunto(punto, avisos) {
@@ -1955,7 +1955,7 @@ if (tramoCoords.length >= 2 && nivel !== 'verde') {
 
       points.forEach(point => {
         if (point.precipitation > 0) {
-          let radius = 6;
+          let radius = 9;
           if (point.precipitation >= 4) radius = 11;
           else if (point.precipitation >= 2) radius = 9;
           else if (point.precipitation >= 1) radius = 7;
@@ -1964,7 +1964,7 @@ if (tramoCoords.length >= 2 && nivel !== 'verde') {
             radius,
             color: colorLluvia(point.precipitation),
             fillColor: colorLluvia(point.precipitation),
-            fillOpacity: 0.55,
+            fillOpacity: 0.75,
             weight: 1
           }).bindPopup(`
             <strong>Lluvia detectada</strong><br>
@@ -2395,8 +2395,8 @@ if (tramoCoords.length >= 2 && nivel !== 'verde') {
 rutaLayer = L.geoJSON(ruta, {
   style: {
     color: '#64748b',   // gris neutro
-    weight: 3,
-    opacity: 0.20
+    weight: 5,
+    opacity: 0.55
   }
 }).addTo(map);
 
