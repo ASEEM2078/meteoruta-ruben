@@ -4,7 +4,6 @@ const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const AEMET_API_KEY = process.env.AEMET_API_KEY || '';
-const WINDY_API_KEY = process.env.WINDY_API_KEY || '';
 
 app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
@@ -1190,12 +1189,7 @@ app.post('/api/route/intelligent', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-app.get('/api/windy/status', (req, res) => {
-  res.json({
-    ok: true,
-    windyConfigured: Boolean(WINDY_API_KEY),
-  });
-});
+
 app.listen(PORT, () => {
   console.log('Servidor funcionando en puerto ' + PORT);
 });
