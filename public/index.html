@@ -1922,22 +1922,45 @@ if (tramoCoords.length >= 2 && nivel !== 'verde') {
       return sampled;
     }
 
-    async function getRainForPoint(lat, lon) {
-      const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=precipitation,rain,showers&forecast_days=1`;
+ async function getRainForPointsBatch(points) {
+  // points: [{lat, lon}, ...]
+  const lats = points.map(p => p.lat).join(',');
+  const lons = points.map(p => p.lon).join(',');
 
-      const res = await fetch(url);
-      if (!res.ok) {
-        throw new Error('Error consultando lluvia para el punto');
-      }
+  const url =
+    `https://api.open-meteo.com/v1/forecast` +
+    `?latitude=${encodeURIComponent(lats)}` +
+    `&longitude=${encodeURIComponent(lons)}` +
+    `&current=precipitation,rain,showers` +
+    `&forecast_days=1`;
 
-      const data = await res.json();
+  const res = await fetch(url);
 
-      return {
-        precipitation: data.current?.precipitation ?? 0,
-        rain: data.current?.rain ?? 0,
-        showers: data.current?.showers ?? 0
-      };
+  if (!res.ok) {
+    // 429 = rate limit
+    if (res.status === 429) {
+      throw new Error('HTTP 429: Límite de peticiones en Open‑Meteo. Reintenta en unos segundos.');
     }
+    throw new Error('Error consultando lluvia (Open‑Meteo).');
+  }
+
+  const data = await res.json();
+
+  // Open‑Meteo devuelve arrays cuando mandas múltiples lat/lon
+  const cur = data.current || {};
+  const precipitation = Array.isArray(cur.precipitation) ? cur.precipitation : [];
+  const rain = Array.isArray(cur.rain) ? cur.rain : [];
+  const showers = Array.isArray(cur.showers) ? cur.showers : [];
+
+  return points.map((p, i) => ({
+    lat: p.lat,
+    lon: p.lon,
+    precipitation: precipitation[i] ?? 0,
+    rain: rain[i] ?? 0,
+    showers: showers[i] ?? 0
+  }));
+}
+``
 
     function colorLluvia(precipitation) {
       if (precipitation >= 4) return 'red';
@@ -1999,22 +2022,10 @@ if (tramoCoords.length >= 2 && nivel !== 'verde') {
 
         document.getElementById('lluviaRutaEstado').textContent = 'Analizando lluvia sobre la ruta...';
 
-        const sampledPoints = sampleRoutePoints(currentRouteCoords, 20);
-        const results = [];
+const sampledPoints = sampleRoutePoints(currentRouteCoords, 60); // menos puntos = más estable
+const points = sampledPoints.map(coord => ({ lon: coord[0], lat: coord[1] }));
 
-        for (const coord of sampledPoints) {
-          const [lon, lat] = coord;
-
-          try {
-            const rainData = await getRainForPoint(lat, lon);
-
-            results.push({
-              lat,
-              lon,
-              precipitation: rainData.precipitation,
-              rain: rainData.rain,
-              showers: rainData.showers
-            });
+const results =
           } catch (error) {
             console.error('Error consultando punto de lluvia:', lat, lon, error);
           }
@@ -2436,7 +2447,8 @@ rutaLayer = L.geoJSON(ruta, {
         pintarAvisosOficiales(avisosRuta, avisosData);
         actualizarEstadoRuta(avisoGlobal, provinciasRuta, meteoAvanzada.fechaLlegada);
         // Auto-analizar lluvia (aviso aunque no haya aviso oficial)
-        analizarLluviaRuta();
+       clearTimeout(window._lluviaAutoTimer);
+window._lluviaAutoTimer = setTimeout(() => analizarLluviaRuta(), 1200);
 
       } catch (e) {
         console.error(e);
