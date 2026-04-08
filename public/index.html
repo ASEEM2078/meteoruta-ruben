@@ -601,14 +601,31 @@
 
  <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
 <script>
+  
+<!-- Leaflet -->
+<script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+<script>
+  // 1️⃣ Crear el mapa (UNA sola vez)
   const map = L.map('map').setView([40.4168, -3.7038], 6);
 
+  // 2️⃣ Capa base
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '© OpenStreetMap'
   }).addTo(map);
+
+  // 3️⃣ Radar simple
+  let radarLayer = L.tileLayer(
+    'https://tilecache.rainviewer.com/v2/radar/nowcast/256/{z}/{x}/{y}/2/1_1.png',
+    {
+      opacity: 0.5,
+      zIndex: 500
+    }
+  );
+
+  radarLayer.addTo(map);
 </script>
 ``
-
     let rutaLayer = null;
     let markersLayer = L.layerGroup().addTo(map);
     let tOrigen = null;
