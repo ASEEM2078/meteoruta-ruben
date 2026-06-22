@@ -1189,7 +1189,95 @@ app.post('/api/route/intelligent', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+app.get('/api/geocode', async (req, res) => {
+  try {
+    const q = String(req.query.q || '').trim();
 
+    if (!q) {
+      return res.status(400).json({ error: 'Falta el lugar a buscar' });
+    }
+
+    const url =
+      'https://nominatim.openstreetmap.org/search?' +
+      new URLSearchParams({
+        format: 'json',
+        limit: '5',
+        countrycodes: 'es',
+        q
+      }).toString();
+
+    const data = await fetchJson(url, {
+      headers: {
+        'Accept-Language': 'es',
+        'User-Agent': 'MeteoRuta/1.0'
+      }
+    });
+
+    res.json(data);
+  } catch (error) {
+    res.status(502).json({
+      error: 'No se pudo buscar el lugar: ' + error.message
+    });
+  }
+});
+
+app.get('/api/reverse-geocode', async (req, res) => {
+  try {
+    const lat = Number(req.query.lat);
+    const lon = Number(req.query.lon);
+
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+      return res.status(400).json({ error: 'Coordenadas no válidas' });
+    }
+
+    const url =
+      'https://nominatim.openstreetmap.org/reverse?' +
+      new URLSearchParams({
+        format: 'json',
+        lat: String(lat),
+        lon: String(lon)
+      }).toString();
+
+    const data = await fetchJson(url, {
+      headers: {
+        'Accept-Language': 'es',
+        'User-Agent': 'MeteoRuta/1.0'
+      }
+    });
+
+    res.json(data);
+  } catch (error) {
+    res.status(502).json({
+      error: 'No se pudo identificar el punto: ' + error.message
+    });
+  }
+});
+
+app.get('/api/calcular-ruta', async (req, res) => {
+  try {
+    const origenLon = Number(req.query.origenLon);
+    const origenLat = Number(req.query.origenLat);
+    const destinoLon = Number(req.query.destinoLon);
+    const destinoLat = Number(req.query.destinoLat);
+
+    if (![origenLon, origenLat, destinoLon, destinoLat].every(Number.isFinite)) {
+      return res.status(400).json({ error: 'Coordenadas de ruta no válidas' });
+    }
+
+    const url =
+      'https://router.project-osrm.org/route/v1/driving/' +
+      origenLon + ',' + origenLat + ';' +
+      destinoLon + ',' + destinoLat +
+      '?overview=full&geometries=geojson';
+
+    const data = await fetchJson(url);
+    res.json(data);
+  } catch (error) {
+    res.status(502).json({
+      error: 'No se pudo calcular la ruta: ' + error.message
+    });
+  }
+});
 app.listen(PORT, () => {
   console.log('Servidor funcionando en puerto ' + PORT);
 });
